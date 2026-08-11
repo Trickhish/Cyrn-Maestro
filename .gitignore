@@ -1,0 +1,134 @@
+# ---------------------------------------------------------------- secrets
+# Never commit. .env holds MAESTRO_SECRET_KEY, which decrypts every stored
+# provider credential and node token in the database.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+id_rsa*
+id_ed25519*
+*.gpg
+*.asc
+secrets/
+credentials/
+node.toml
+maestro-node.toml
+
+# ---------------------------------------------------------------- data
+# Runtime state. The database contains user password hashes, session tokens,
+# task transcripts and encrypted credentials.
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+dumps/
+backups/
+*.dump
+*.bak
+
+# ---------------------------------------------------------------- dependencies
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/releases
+!.yarn/plugins
+!.yarn/sdks
+!.yarn/versions
+jspm_packages/
+bower_components/
+vendor/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# ---------------------------------------------------------------- build output
+dist/
+build/
+out/
+.output/
+.vite/
+.turbo/
+.next/
+.nuxt/
+.svelte-kit/
+.astro/
+*.tsbuildinfo
+.cache/
+.parcel-cache/
+# Compiled node daemon binaries
+maestro-node
+maestro-node-*
+!maestro-node.service
+
+# ---------------------------------------------------------------- test & coverage
+coverage/
+.nyc_output/
+*.lcov
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+__snapshots__/*.snap.new
+
+# ---------------------------------------------------------------- logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+bun-debug.log*
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# ---------------------------------------------------------------- runtime
+pids/
+*.pid
+*.seed
+*.pid.lock
+.grunt
+.lock-wscript
+
+# ---------------------------------------------------------------- editors
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+.history/
+*~
+\#*\#
+.\#*
+
+# ---------------------------------------------------------------- os
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ---------------------------------------------------------------- scratch
+scratch/
+tmp/
+temp/
+*.tmp
+*.orig
+*.rej

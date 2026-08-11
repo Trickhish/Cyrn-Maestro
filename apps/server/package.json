@@ -1,0 +1,22 @@
+{
+  "name": "@maestro/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch src/index.ts",
+    "db:migrate": "bun run src/db/migrate.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@maestro/protocol": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.9.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^5.9.0"
+  }
+}

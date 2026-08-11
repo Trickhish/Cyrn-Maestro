@@ -1,0 +1,159 @@
+/* CYRN design system tokens.
+   Source of truth: the "CYRN Design System" project on claude.ai/design
+   (tokens/colors.css, tokens/typography.css). Mirrored here as Tailwind v4
+   @theme entries so every value is reachable as both a CSS custom property
+   and a utility class (bg-surface, text-accent, font-mono, …).
+
+   Maestro is a dark-first product: the :root palette below IS the dark
+   palette, and [data-theme="light"] re-points the semantic tokens. Components
+   must only ever reference the semantic names, never the raw ramp values —
+   that is what keeps the light theme a one-file change. */
+
+@theme {
+  /* ---- raw ramps ---- */
+  --color-navy-950: #070b11;
+  --color-navy-900: #0a0f17;
+  --color-navy-850: #0d131d;
+  --color-navy-800: #111927;
+  --color-navy-700: #182236;
+  --color-navy-600: #22304a;
+  --color-navy-500: #37496b;
+  --color-navy-400: #5b7096;
+
+  --color-gray-100: #eef2f6;
+  --color-gray-200: #dbe2ea;
+  --color-gray-300: #a6b2c2;
+  --color-gray-400: #7c8aa0;
+  --color-gray-500: #5c6b82;
+  --color-gray-600: #3f4b5e;
+
+  --color-cyan-200: #a6f7ec;
+  --color-cyan-300: #7df3e0;
+  --color-cyan-400: #3ce8ce;
+  --color-cyan-500: #1fe5c9;
+  --color-cyan-600: #12b8a1;
+  --color-cyan-700: #0b8c7a;
+  --color-cyan-900: #083f38;
+
+  --color-indigo-300: #9aabff;
+  --color-indigo-400: #7b90fc;
+  --color-indigo-500: #5b7cfa;
+  --color-indigo-600: #4560d6;
+
+  --color-green-400: #4fe39a;
+  --color-green-500: #2fd97a;
+  --color-amber-400: #f7c85e;
+  --color-amber-500: #f5b942;
+  --color-red-400: #ff7d7d;
+  --color-red-500: #ff5c5c;
+
+  /* ---- semantic surfaces ---- */
+  --color-canvas: var(--color-navy-900);
+  --color-canvas-alt: var(--color-navy-950);
+  --color-surface: var(--color-navy-850);
+  --color-raised: var(--color-navy-800);
+  --color-hover: var(--color-navy-700);
+  --color-inset: var(--color-navy-950);
+
+  /* ---- semantic text ---- */
+  --color-primary: var(--color-gray-100);
+  --color-secondary: var(--color-gray-300);
+  --color-tertiary: var(--color-gray-400);
+  --color-faint: var(--color-gray-500);
+  --color-fainter: var(--color-gray-600);
+  --color-on-accent: var(--color-navy-950);
+
+  /* ---- accents and status ---- */
+  --color-accent: var(--color-cyan-500);
+  --color-accent-hi: var(--color-cyan-300);
+  --color-accent-dim: var(--color-cyan-600);
+  --color-plan: var(--color-indigo-500);
+  --color-add: var(--color-green-500);
+  --color-add-hi: var(--color-green-400);
+  --color-warn: var(--color-amber-500);
+  --color-warn-hi: var(--color-amber-400);
+  --color-bad: var(--color-red-500);
+  --color-bad-hi: var(--color-red-400);
+
+  /* ---- type ---- */
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+:root {
+  /* Values that are not utility-generating but are used by component classes. */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-default: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --border-accent: rgba(31, 229, 201, 0.4);
+  --border-warn: rgba(245, 185, 66, 0.45);
+  --border-plan: rgba(91, 124, 250, 0.35);
+
+  --accent-soft: rgba(31, 229, 201, 0.12);
+  --accent-glow: rgba(31, 229, 201, 0.15);
+  --warn-soft: rgba(245, 185, 66, 0.12);
+  --add-soft: rgba(47, 217, 122, 0.1);
+  --bad-soft: rgba(255, 92, 92, 0.1);
+
+  --focus-ring: 0 0 0 3px rgba(31, 229, 201, 0.35);
+  --composer-ring: 0 0 0 3px rgba(31, 229, 201, 0.1);
+
+  /* The filled button gets its own pair. On the dark ground the CYRN accent
+     carries dark text at 9:1, but on white that same pairing measures 3.98:1 —
+     under the 4.5 a 12.5px label needs. Light overrides the fill rather than
+     the accent itself, so dots, meters and links keep the brand value. */
+  --btn-fill: var(--color-accent);
+  --btn-fill-hover: var(--color-accent-hi);
+  --btn-fill-text: var(--color-on-accent);
+}
+
+[data-theme="light"] {
+  --color-canvas: #f6f8fa;
+  --color-canvas-alt: #eef1f5;
+  --color-surface: #ffffff;
+  --color-raised: #ffffff;
+  --color-hover: #eef1f5;
+  --color-inset: #eef1f5;
+
+  --color-primary: #0d1420;
+  --color-secondary: #414c5c;
+  --color-tertiary: #6b7686;
+  --color-faint: #8993a1;
+  /* Diff gutter numbers ride on this, so it has to stay legible, not decorative. */
+  --color-fainter: #9aa5b3;
+  --color-on-accent: #04231f;
+
+  --color-accent: var(--color-cyan-700);
+  --color-accent-dim: var(--color-cyan-600);
+  --color-add: #1c9a5c;
+  --color-warn: #b9800f;
+  --color-bad: #d63c3c;
+
+  /* "-hi" means emphasis, not brightness. On a dark ground emphasis is a
+     lighter tint; on a light ground it has to invert and go darker, or every
+     highlighted string — diff additions, "streaming", the accent links —
+     washes out against white. */
+  --color-accent-hi: #076253;
+  --color-add-hi: #157a47;
+  --color-warn-hi: #8a5d06;
+  --color-bad-hi: #b02a2a;
+  --color-plan: var(--color-indigo-600);
+
+  --border-subtle: rgba(13, 20, 32, 0.07);
+  --border-default: rgba(13, 20, 32, 0.12);
+  --border-strong: rgba(13, 20, 32, 0.22);
+  --border-accent: rgba(11, 140, 122, 0.35);
+
+  --accent-soft: rgba(11, 140, 122, 0.1);
+  --accent-glow: rgba(11, 140, 122, 0.14);
+  --warn-soft: rgba(185, 128, 15, 0.12);
+  --add-soft: rgba(28, 154, 92, 0.12);
+  --bad-soft: rgba(214, 60, 60, 0.1);
+  --border-warn: rgba(185, 128, 15, 0.45);
+  --border-plan: rgba(69, 96, 214, 0.35);
+
+  --btn-fill: #076253;
+  --btn-fill-hover: #05513f;
+  --btn-fill-text: #ffffff;
+}

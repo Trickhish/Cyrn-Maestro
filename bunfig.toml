@@ -1,0 +1,4 @@
+[test]
+# Runs before any test module is imported, so the database path is set before
+# config.ts can be evaluated by whichever test file happens to load it first.
+preload = ["./test-setup.ts"]

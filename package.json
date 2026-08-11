@@ -1,0 +1,16 @@
+{
+  "name": "maestro",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "bun run --cwd apps/web dev",
+    "dev:server": "bun run --cwd apps/server dev",
+    "build": "bun run --cwd apps/web build",
+    "start": "bun run --cwd apps/server start",
+    "serve": "bun run build && bun run start",
+    "node:dev": "bun run --cwd apps/node dev",
+    "db:migrate": "bun run --cwd apps/server db:migrate",
+    "typecheck": "bun run --cwd apps/web typecheck && bun run --cwd apps/server typecheck",
+    "test": "bun test"
+  }
+}

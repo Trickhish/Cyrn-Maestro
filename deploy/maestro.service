@@ -1,0 +1,31 @@
+# Maestro demo — systemd unit.
+#
+#   cp deploy/maestro.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now maestro
+#
+# Serves the built webapp on 127.0.0.1:3000. It deliberately does not listen on
+# a public interface — the reverse proxy is the only thing that should reach it.
+
+[Unit]
+Description=Maestro webapp
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/maestro
+Environment=PORT=3000
+Environment=HOST=127.0.0.1
+ExecStart=/root/.bun/bin/bun run apps/server/src/index.ts
+Restart=on-failure
+RestartSec=2
+
+# The demo serves static files and nothing else, so it needs no write access.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/maestro
+
+[Install]
+WantedBy=multi-user.target
