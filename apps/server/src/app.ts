@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { authRoutes } from "./http/auth.routes";
+import { providerRoutes } from "./http/providers.routes";
 import { errorResponse, withActor, type Env } from "./http/context";
 import { serveStatic } from "./http/static";
 
@@ -14,6 +15,7 @@ app.get("/healthz", (c) => c.text("ok\n"));
 
 app.use("/api/*", withActor);
 app.route("/api/auth", authRoutes);
+app.route("/api/providers", providerRoutes);
 
 /* An unmatched API path is a 404 in JSON. Only non-API paths fall through to
    the SPA. */
