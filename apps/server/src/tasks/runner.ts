@@ -1,0 +1,499 @@
+import { eq } from "drizzle-orm";
+import {
+  newId,
+  TOOL_SCHEMAS,
+  type ToolName,
+  type TaskStatus,
+} from "@maestro/protocol";
+import { db, schema } from "../db";
+import { config } from "../config";
+import { append, conversationFrom } from "./events";
+import { resolveProvider, toolDefinitions, estimateCost, NoProviderError } from "../providers/gateway";
+import { ProviderError } from "../providers/types";
+import { awaitResult, sendToNode, subscribeToTask, getLiveNode } from "../nodes/registry";
+
+/* The agent loop.
+ *
+ * The server owns the conversation: it calls the model, receives tool calls,
+ * ships them to the node, feeds the results back, and repeats until the model
+ * stops. The node never sees a credential and never decides what to do next.
+ *
+ * Every turn is reconstructed from task_events rather than kept in memory, so
+ * a task survives a restart and a resumed thread is identical to the live one. */
+
+const SYSTEM_PROMPT = `You are a coding agent running on a remote machine through Maestro.
+
+You are working inside a single workspace directory. All paths are relative to it.
+
+- Read a file before editing it, so the text you replace matches exactly.
+- Prefer edit_file over write_file for files that already exist.
+- Run tests or commands to verify your work rather than assuming it worked.
+- When you are done, say briefly what you changed and what you verified.
+- If a tool fails, read the error and adjust — do not repeat the same call.`;
+
+interface RunState {
+  abort: AbortController;
+  /* Messages typed while the agent is working. Delivered at the next turn
+     boundary rather than mid-stream, so the model sees a coherent
+     conversation instead of an interruption inside its own turn. */
+  queued: string[];
+  awaitingApproval?: { callId: string; tool: ToolName; args: unknown };
+}
+
+const running = new Map<string, RunState>();
+
+export function isRunning(taskId: string): boolean {
+  return running.has(taskId);
+}
+
+export function steer(taskId: string, text: string): boolean {
+  const state = running.get(taskId);
+  if (!state) return false;
+  state.queued.push(text);
+  append(taskId, { kind: "user_message", text, queued: true });
+  return true;
+}
+
+export function cancel(taskId: string): boolean {
+  const state = running.get(taskId);
+  if (!state) return false;
+  state.abort.abort();
+  return true;
+}
+
+/* An approval decision arrives from the UI. Resuming means re-issuing the same
+   call with approved:true — the node refuses an approval it never asked for,
+   so this cannot be used to run something the policy never escalated. */
+export async function decideApproval(
+  taskId: string,
+  callId: string,
+  approved: boolean,
+  decidedBy: string,
+): Promise<boolean> {
+  const [approval] = await db
+    .select()
+    .from(schema.approvals)
+    .where(eq(schema.approvals.callId, callId))
+    .limit(1);
+
+  if (!approval || approval.taskId !== taskId || approval.approved !== null) return false;
+
+  await db
+    .update(schema.approvals)
+    .set({ approved, decidedBy, decidedAt: Date.now() })
+    .where(eq(schema.approvals.id, approval.id));
+
+  append(taskId, { kind: "approval_decided", callId, approved, decidedBy });
+  return true;
+}
+
+export async function startTask(taskId: string): Promise<void> {
+  if (running.has(taskId)) return;
+
+  const state: RunState = { abort: new AbortController(), queued: [] };
+  running.set(taskId, state);
+
+  try {
+    await runLoop(taskId, state);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await finish(taskId, "failed", message);
+    append(taskId, { kind: "status", status: "failed", detail: message });
+  } finally {
+    running.delete(taskId);
+  }
+}
+
+async function runLoop(taskId: string, state: RunState): Promise<void> {
+  const [task] = await db.select().from(schema.tasks).where(eq(schema.tasks.id, taskId)).limit(1);
+  if (!task) throw new Error("That task no longer exists.");
+
+  const [project] = await db
+    .select()
+    .from(schema.projects)
+    .where(eq(schema.projects.id, task.projectId))
+    .limit(1);
+  if (!project) throw new Error("That task's project no longer exists.");
+
+  /* Whose credentials: the project's owner, never the actor's. */
+  const provider = await resolveProvider(
+    { ownerUserId: project.ownerUserId, ownerOrgId: project.ownerOrgId },
+    task.model ?? project.defaultModelId,
+  );
+
+  const node = task.nodeId ? getLiveNode(task.nodeId) : undefined;
+  if (!node) throw new Error("The node for this task is not connected.");
+
+  append(taskId, {
+    kind: "routing_decision",
+    nodeName: node.name,
+    model: provider.model,
+    because: task.model ? "pinned on the task" : "the project's default",
+  });
+
+  await db
+    .update(schema.tasks)
+    .set({ status: "running", model: provider.model, startedAt: Date.now() })
+    .where(eq(schema.tasks.id, taskId));
+  append(taskId, { kind: "status", status: "running" });
+
+  /* Node log frames are forwarded straight into the event log so `bash` output
+     is watchable as it arrives rather than appearing all at once at the end. */
+  const unsubscribe = subscribeToTask(taskId, (message) => {
+    if (message.type === "task.log") {
+      append(taskId, {
+        kind: "log",
+        callId: message.callId,
+        stream: message.stream,
+        chunk: message.chunk,
+      });
+    }
+  });
+
+  const system = [SYSTEM_PROMPT, project.instructions].filter(Boolean).join("\n\n");
+  let toolCallCount = 0;
+  const startedAt = Date.now();
+
+  try {
+    for (let turn = 0; turn < 100; turn++) {
+      if (state.abort.signal.aborted) {
+        await finish(taskId, "cancelled", "Stopped by the user.");
+        append(taskId, { kind: "status", status: "cancelled", detail: "Stopped by the user." });
+        return;
+      }
+      if (Date.now() - startedAt > config.taskLimits.wallClockMs) {
+        await finish(taskId, "failed", "Task exceeded its time limit.");
+        append(taskId, { kind: "status", status: "failed", detail: "Task exceeded its time limit." });
+        return;
+      }
+
+      /* Anything typed while the last turn ran is delivered now, at the turn
+         boundary. The event was already appended when it was typed, so
+         conversationFrom picks it up in order. */
+      state.queued.length = 0;
+
+      const messages = await conversationFrom(taskId);
+
+      let text = "";
+      const calls: Array<{ id: string; name: string; argumentsJson: string }> = [];
+      let finishReason = "stop";
+
+      try {
+        for await (const event of provider.adapter.stream(
+          {
+            model: provider.model,
+            messages: [{ role: "system", content: system }, ...messages],
+            tools: toolDefinitions(),
+            maxTokens: 8192,
+            reasoningEffort: provider.reasoningEffort,
+          },
+          state.abort.signal,
+        )) {
+          switch (event.type) {
+            case "text":
+              text += event.delta;
+              append(taskId, { kind: "assistant_delta", text: event.delta });
+              break;
+            case "tool_call":
+              calls.push(event.call);
+              break;
+            case "usage": {
+              const cost = estimateCost(event, provider);
+              append(taskId, {
+                kind: "usage",
+                model: provider.model,
+                inputTokens: event.inputTokens,
+                outputTokens: event.outputTokens,
+                costUsd: cost,
+              });
+              await bumpUsage(taskId, event.inputTokens, event.outputTokens, cost);
+              break;
+            }
+            case "done":
+              finishReason = event.finishReason;
+              break;
+          }
+        }
+      } catch (err) {
+        if (state.abort.signal.aborted) {
+          await finish(taskId, "cancelled", "Stopped by the user.");
+          append(taskId, { kind: "status", status: "cancelled", detail: "Stopped by the user." });
+          return;
+        }
+        throw err;
+      }
+
+      if (text || calls.length) {
+        append(taskId, {
+          kind: "assistant_message",
+          text,
+          model: provider.model,
+          nodeName: node.name,
+        });
+      }
+
+      if (calls.length === 0) {
+        await finish(taskId, "completed");
+        append(taskId, { kind: "status", status: "completed" });
+        return;
+      }
+
+      if (finishReason === "length") {
+        await finish(taskId, "failed", "The model hit its output limit mid-turn.");
+        append(taskId, {
+          kind: "status",
+          status: "failed",
+          detail: "The model hit its output limit mid-turn.",
+        });
+        return;
+      }
+
+      for (const call of calls) {
+        toolCallCount++;
+        if (toolCallCount > config.taskLimits.maxToolCalls) {
+          await finish(taskId, "failed", "Task exceeded its tool-call limit.");
+          append(taskId, {
+            kind: "status",
+            status: "failed",
+            detail: "Task exceeded its tool-call limit.",
+          });
+          return;
+        }
+
+        await executeCall(taskId, task.nodeId!, call, state);
+        if (state.abort.signal.aborted) break;
+      }
+    }
+
+    await finish(taskId, "failed", "Task ran too many turns without finishing.");
+    append(taskId, {
+      kind: "status",
+      status: "failed",
+      detail: "Task ran too many turns without finishing.",
+    });
+  } finally {
+    unsubscribe();
+  }
+}
+
+async function executeCall(
+  taskId: string,
+  nodeId: string,
+  call: { id: string; name: string; argumentsJson: string },
+  state: RunState,
+): Promise<void> {
+  const tool = call.name as ToolName;
+
+  /* Malformed JSON from the model is common enough to handle as a normal
+     outcome: hand the error back and let it correct itself next turn. */
+  let args: unknown;
+  try {
+    args = JSON.parse(call.argumentsJson || "{}");
+  } catch {
+    append(taskId, {
+      kind: "tool_call",
+      callId: call.id,
+      tool: (TOOL_SCHEMAS as Record<string, unknown>)[tool] ? tool : "bash",
+      args: {},
+      summary: call.name,
+    });
+    append(taskId, {
+      kind: "tool_result",
+      callId: call.id,
+      ok: false,
+      output: `The arguments for ${call.name} were not valid JSON. Send them again as a JSON object.`,
+    });
+    return;
+  }
+
+  if (!(tool in TOOL_SCHEMAS)) {
+    append(taskId, { kind: "tool_call", callId: call.id, tool: "bash", args, summary: call.name });
+    append(taskId, {
+      kind: "tool_result",
+      callId: call.id,
+      ok: false,
+      output: `There is no tool called ${call.name}. Available tools: ${Object.keys(TOOL_SCHEMAS).join(", ")}.`,
+    });
+    return;
+  }
+
+  append(taskId, { kind: "tool_call", callId: call.id, tool, args, summary: summarise(tool, args) });
+
+  const result = await dispatchToNode(taskId, nodeId, call.id, tool, args, state, false);
+
+  append(taskId, {
+    kind: "tool_result",
+    callId: call.id,
+    ok: result.ok,
+    output: result.output,
+    truncated: result.truncated,
+    durationMs: result.durationMs,
+    exitCode: result.exitCode,
+  });
+}
+
+/* Sends a tool call and waits for its result, handling the approval round trip
+   in between. Returns a failed result rather than throwing, so one refused
+   command does not end the task. */
+async function dispatchToNode(
+  taskId: string,
+  nodeId: string,
+  callId: string,
+  tool: ToolName,
+  args: unknown,
+  state: RunState,
+  approved: boolean,
+): Promise<{ ok: boolean; output: string; truncated?: boolean; durationMs?: number; exitCode?: number }> {
+  return new Promise((resolve) => {
+    const done = (value: Awaited<ReturnType<typeof dispatchToNode>>) => {
+      cleanup();
+      resolve(value);
+    };
+
+    const stopWaiting = awaitResult(callId, async (message) => {
+      if (message.type === "tool.result") {
+        done({
+          ok: message.ok,
+          output: message.output,
+          truncated: message.truncated,
+          durationMs: message.durationMs,
+          exitCode: message.exitCode,
+        });
+        return;
+      }
+
+      if (message.type === "tool.approval_request") {
+        await db.insert(schema.approvals).values({
+          id: crypto.randomUUID(),
+          taskId,
+          callId,
+          tool: message.tool,
+          summary: message.summary,
+          reason: message.reason,
+          approved: null,
+          decidedBy: null,
+          decidedAt: null,
+          requestedAt: Date.now(),
+        });
+
+        await db
+          .update(schema.tasks)
+          .set({ status: "awaiting_approval" })
+          .where(eq(schema.tasks.id, taskId));
+
+        append(taskId, {
+          kind: "approval_requested",
+          callId,
+          tool: message.tool,
+          summary: message.summary,
+          reason: message.reason,
+        });
+        append(taskId, { kind: "status", status: "awaiting_approval" });
+
+        const decision = await waitForDecision(callId, state);
+
+        if (!decision) {
+          done({ ok: false, output: "The command was denied." });
+          return;
+        }
+
+        await db.update(schema.tasks).set({ status: "running" }).where(eq(schema.tasks.id, taskId));
+        append(taskId, { kind: "status", status: "running" });
+
+        const retry = await dispatchToNode(taskId, nodeId, callId, tool, args, state, true);
+        done(retry);
+      }
+    });
+
+    const onAbort = () => done({ ok: false, output: "The task was stopped." });
+    state.abort.signal.addEventListener("abort", onAbort, { once: true });
+
+    function cleanup() {
+      stopWaiting();
+      state.abort.signal.removeEventListener("abort", onAbort);
+    }
+
+    const sent = sendToNode(nodeId, {
+      type: "tool.call",
+      id: newId(),
+      taskId,
+      callId,
+      tool,
+      args,
+      ...(approved ? { approved: true } : {}),
+    });
+
+    if (!sent) done({ ok: false, output: "The node for this task disconnected." });
+  });
+}
+
+/* Polls the approvals row rather than holding a callback, so a decision made
+   from another browser tab — or after a server restart — still resumes the
+   task. */
+async function waitForDecision(callId: string, state: RunState): Promise<boolean> {
+  while (!state.abort.signal.aborted) {
+    const [row] = await db
+      .select({ approved: schema.approvals.approved })
+      .from(schema.approvals)
+      .where(eq(schema.approvals.callId, callId))
+      .limit(1);
+
+    if (row?.approved === true) return true;
+    if (row?.approved === false) return false;
+
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return false;
+}
+
+async function bumpUsage(taskId: string, input: number, output: number, cost: number) {
+  const [task] = await db
+    .select({
+      inputTokens: schema.tasks.inputTokens,
+      outputTokens: schema.tasks.outputTokens,
+      costUsd: schema.tasks.costUsd,
+    })
+    .from(schema.tasks)
+    .where(eq(schema.tasks.id, taskId))
+    .limit(1);
+
+  await db
+    .update(schema.tasks)
+    .set({
+      inputTokens: (task?.inputTokens ?? 0) + input,
+      outputTokens: (task?.outputTokens ?? 0) + output,
+      costUsd: (task?.costUsd ?? 0) + cost,
+    })
+    .where(eq(schema.tasks.id, taskId));
+}
+
+async function finish(taskId: string, status: TaskStatus, error?: string) {
+  await db
+    .update(schema.tasks)
+    .set({ status, endedAt: Date.now(), error: error ?? null })
+    .where(eq(schema.tasks.id, taskId));
+}
+
+export function summarise(tool: ToolName, args: unknown): string {
+  const a = (args ?? {}) as Record<string, unknown>;
+  switch (tool) {
+    case "bash":
+      return String(a.command ?? "");
+    case "write_file":
+      return String(a.path ?? "");
+    case "edit_file":
+      return String(a.path ?? "");
+    case "read_file":
+      return String(a.path ?? "");
+    case "list_dir":
+      return String(a.path ?? ".");
+    case "glob":
+      return String(a.pattern ?? "");
+    case "grep":
+      return String(a.pattern ?? "");
+    default:
+      return tool;
+  }
+}
+
+export { NoProviderError, ProviderError };

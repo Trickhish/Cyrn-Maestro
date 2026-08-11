@@ -140,6 +140,10 @@ export const TaskEvent = z.discriminatedUnion("kind", [
 export type TaskEvent = z.infer<typeof TaskEvent>;
 export type TaskEventKind = TaskEvent["kind"];
 
+/* The shape a caller writes, before defaults are applied. Appending an event
+   should not require spelling out every field that has a default. */
+export type TaskEventInput = z.input<typeof TaskEvent>;
+
 /* Deltas are for live rendering only. Replaying a finished task skips them —
    the assistant_message that follows holds the same text in one row. */
 export const EPHEMERAL_KINDS: ReadonlySet<TaskEventKind> = new Set<TaskEventKind>([

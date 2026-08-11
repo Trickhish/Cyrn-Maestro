@@ -19,6 +19,12 @@ const server = Bun.serve<{ session: SocketSession }, never>({
   port: config.port,
   hostname: config.host,
 
+  /* Bun closes an idle request after 10 seconds by default, which is shorter
+     than two things this server legitimately does: probing a provider's whole
+     model list, and holding an SSE stream open between events. Both look idle
+     from the socket's point of view. */
+  idleTimeout: 255,
+
   fetch(request, srv) {
     const url = new URL(request.url);
 
