@@ -186,6 +186,18 @@ export const TaskCancel = z.object({
   taskId: z.string(),
 });
 
+/* Sent when a task reaches a terminal state, so the node can free its slot.
+   Without it a node silently fills to maxConcurrentTasks and rejects
+   everything afterwards — and because the rejection is per assignment rather
+   than per tool call, the symptom is every subsequent call failing with
+   "not running that task" rather than anything mentioning capacity. */
+export const TaskRelease = z.object({
+  type: z.literal("task.release"),
+  id: z.string(),
+  taskId: z.string(),
+  status: z.enum(["completed", "failed", "cancelled"]),
+});
+
 export const Ping = z.object({
   type: z.literal("ping"),
   id: z.string(),
@@ -199,6 +211,7 @@ export const ServerMessage = z.discriminatedUnion("type", [
   TaskAssign,
   ToolCall,
   TaskCancel,
+  TaskRelease,
   Ping,
 ]);
 

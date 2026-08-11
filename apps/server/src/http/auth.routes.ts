@@ -9,6 +9,7 @@ import {
   registrationOpen,
   sessionCookie,
   clearedCookie,
+  isSecureRequest,
   SESSION_COOKIE,
 } from "../lib/auth";
 import { BadRequest, requireActor, type Env } from "./context";
@@ -21,6 +22,15 @@ const Credentials = z.object({
 });
 
 export const authRoutes = new Hono<Env>();
+
+/* Whether this particular request reached us over HTTPS, honouring the proxy's
+   X-Forwarded-Proto since the hop to this server is plain HTTP either way. */
+function secureFor(c: { req: { header(name: string): string | undefined; url: string } }): boolean {
+  return isSecureRequest({
+    forwardedProto: c.req.header("x-forwarded-proto") ?? null,
+    url: c.req.url,
+  });
+}
 
 authRoutes.get("/session", async (c) => {
   const actor = c.get("actor");
@@ -50,7 +60,7 @@ authRoutes.post("/register", async (c) => {
     userAgent: c.req.header("user-agent") ?? undefined,
   });
 
-  c.header("Set-Cookie", sessionCookie(token));
+  c.header("Set-Cookie", sessionCookie(token, secureFor(c)));
   return c.json({ actor }, 201);
 });
 
@@ -72,13 +82,13 @@ authRoutes.post("/login", async (c) => {
     userAgent: c.req.header("user-agent") ?? undefined,
   });
 
-  c.header("Set-Cookie", sessionCookie(token));
+  c.header("Set-Cookie", sessionCookie(token, secureFor(c)));
   return c.json({ actor });
 });
 
 authRoutes.post("/logout", async (c) => {
   await destroySession(getCookie(c, SESSION_COOKIE));
-  c.header("Set-Cookie", clearedCookie());
+  c.header("Set-Cookie", clearedCookie(secureFor(c)));
   return c.json({ ok: true });
 });
 

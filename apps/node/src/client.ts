@@ -210,6 +210,13 @@ export class NodeClient {
         break;
       }
 
+      /* Frees the slot when a task ends. Without this the node fills up to
+         maxConcurrentTasks and rejects every assignment after that. */
+      case "task.release": {
+        this.running.delete(message.taskId);
+        break;
+      }
+
       case "ping":
         break;
     }

@@ -10,6 +10,8 @@ import {
   revokeNode,
   onlineNodes,
   resetRegistry,
+  awaitResult,
+  subscribeToTask,
   type SocketSession,
 } from "./registry";
 
@@ -188,6 +190,94 @@ describe("unauthenticated sockets", () => {
     const socket = fakeSocket();
     await handleNodeMessage({}, socket, "not json at all");
     expect(socket.last().type).toBe("node.rejected");
+  });
+});
+
+describe("routing replies back to the waiting loop", () => {
+  async function connected() {
+    const { socket, session } = await enrolled();
+    return { socket, session };
+  }
+
+  test("a tool result reaches the handler waiting on that call", async () => {
+    const { session, socket } = await connected();
+    void socket;
+
+    let got: any;
+    awaitResult("call-1", (m) => (got = m));
+
+    await handleNodeMessage(
+      session,
+      fakeSocket(),
+      JSON.stringify({ type: "tool.result", id: newId(), taskId: "t1", callId: "call-1", ok: true, output: "done" }),
+    );
+
+    expect(got?.type).toBe("tool.result");
+  });
+
+  /* The bug this pins: task.log also carries a callId. Routing it to the
+     waiting handler consumed the registration, so the tool.result that
+     followed found nothing and the task hung in "running" forever, with no
+     error in any log. */
+  test("a log frame does not consume the handler waiting for the result", async () => {
+    const { session } = await connected();
+
+    const seen: string[] = [];
+    awaitResult("call-2", (m) => seen.push(m.type));
+
+    await handleNodeMessage(
+      session,
+      fakeSocket(),
+      JSON.stringify({ type: "task.log", id: newId(), taskId: "t1", callId: "call-2", stream: "stdout", chunk: "output\n" }),
+    );
+    await handleNodeMessage(
+      session,
+      fakeSocket(),
+      JSON.stringify({ type: "tool.result", id: newId(), taskId: "t1", callId: "call-2", ok: true, output: "done" }),
+    );
+
+    expect(seen).toEqual(["tool.result"]);
+  });
+
+  test("log frames still reach task subscribers", async () => {
+    const { session } = await connected();
+
+    const seen: string[] = [];
+    subscribeToTask("t1", (m) => seen.push(m.type));
+
+    await handleNodeMessage(
+      session,
+      fakeSocket(),
+      JSON.stringify({ type: "task.log", id: newId(), taskId: "t1", callId: "c", stream: "stdout", chunk: "x" }),
+    );
+
+    expect(seen).toEqual(["task.log"]);
+  });
+
+  /* An approval request pauses the call rather than ending it — the same
+     callId is re-issued once a human decides, so the registration has to
+     survive until a real result arrives. */
+  test("an approval request does not end the call", async () => {
+    const { session } = await connected();
+
+    const seen: string[] = [];
+    awaitResult("call-3", (m) => seen.push(m.type));
+
+    await handleNodeMessage(
+      session,
+      fakeSocket(),
+      JSON.stringify({
+        type: "tool.approval_request", id: newId(), taskId: "t1", callId: "call-3",
+        tool: "bash", summary: "rm x", reason: "policy_ask",
+      }),
+    );
+    await handleNodeMessage(
+      session,
+      fakeSocket(),
+      JSON.stringify({ type: "tool.result", id: newId(), taskId: "t1", callId: "call-3", ok: true, output: "ok" }),
+    );
+
+    expect(seen).toEqual(["tool.approval_request", "tool.result"]);
   });
 });
 

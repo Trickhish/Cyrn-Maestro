@@ -75,6 +75,43 @@ describe("login", () => {
   });
 });
 
+/* A Secure cookie is silently dropped over plain HTTP: login returns 200, the
+   browser stores nothing, and the user appears logged out with no error
+   anywhere. Deriving the flag from configuration instead of the request is how
+   that happens, so both directions are pinned here. */
+describe("cookie security follows the request, not the config", () => {
+  test("no Secure flag on a plain HTTP request", async () => {
+    const res = await app.request("/api/auth/login", json({ email: "first@x.com", password: GOOD }));
+    expect(res.headers.get("set-cookie")).not.toContain("Secure");
+  });
+
+  test("Secure flag when the proxy reports HTTPS", async () => {
+    const res = await app.request("/api/auth/login", {
+      ...json({ email: "first@x.com", password: GOOD }),
+      headers: { "content-type": "application/json", "x-forwarded-proto": "https" },
+    });
+    expect(res.headers.get("set-cookie")).toContain("Secure");
+  });
+
+  test("the first value wins in a chained X-Forwarded-Proto", async () => {
+    const res = await app.request("/api/auth/login", {
+      ...json({ email: "first@x.com", password: GOOD }),
+      headers: { "content-type": "application/json", "x-forwarded-proto": "https, http" },
+    });
+    expect(res.headers.get("set-cookie")).toContain("Secure");
+  });
+
+  test("logout clears with the same flag it set", async () => {
+    const res = await app.request("/api/auth/logout", {
+      method: "POST",
+      headers: { "x-forwarded-proto": "https" },
+    });
+    const cookie = res.headers.get("set-cookie") ?? "";
+    expect(cookie).toContain("Secure");
+    expect(cookie).toContain("Max-Age=0");
+  });
+});
+
 describe("sessions", () => {
   test("/me is 401 without a cookie and 200 with one", async () => {
     expect((await app.request("/api/auth/me")).status).toBe(401);

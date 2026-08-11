@@ -61,12 +61,22 @@ export function subscribeToTask(taskId: string, handler: ResultHandler): () => v
   };
 }
 
+/* Only these two conclude a pending tool call. task.log also carries a callId,
+   and routing it here would hand the waiting handler a frame it ignores — while
+   consuming the registration, so the real tool.result that follows finds no
+   handler and the task hangs forever with no error anywhere. */
+const RESOLVES_A_CALL = new Set(["tool.result", "tool.approval_request"]);
+
 function dispatch(message: NodeMessage): void {
   const callId = "callId" in message ? message.callId : undefined;
-  if (callId) {
+
+  if (callId && RESOLVES_A_CALL.has(message.type)) {
     const handler = waiting.get(callId);
     if (handler) {
-      waiting.delete(callId);
+      /* An approval request does not end the call: the same callId is
+         re-issued once a human decides, so the handler must stay registered
+         until a result actually arrives. */
+      if (message.type === "tool.result") waiting.delete(callId);
       handler(message);
     }
   }

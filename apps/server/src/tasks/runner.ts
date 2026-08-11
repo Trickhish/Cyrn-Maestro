@@ -139,6 +139,8 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
 
   /* Node log frames are forwarded straight into the event log so `bash` output
      is watchable as it arrives rather than appearing all at once at the end. */
+  let rejection: string | undefined;
+
   const unsubscribe = subscribeToTask(taskId, (message) => {
     if (message.type === "task.log") {
       append(taskId, {
@@ -147,6 +149,17 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
         stream: message.stream,
         chunk: message.chunk,
       });
+    }
+
+    /* A node that refuses the assignment must fail the task, not be ignored.
+       Carrying on produces a run where every tool call fails for a reason that
+       has nothing to do with what the node actually said. */
+    if (message.type === "task.rejected") {
+      rejection =
+        message.reason === "at_capacity"
+          ? `${node.name} is already running its maximum number of tasks.`
+          : `${node.name} refused this task: ${message.reason}${message.detail ? ` — ${message.detail}` : ""}`;
+      state.abort.abort();
     }
   });
 
@@ -157,6 +170,13 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
   try {
     for (let turn = 0; turn < 100; turn++) {
       if (state.abort.signal.aborted) {
+        /* A rejection from the node is a failure, not a user cancellation —
+           saying "stopped by the user" would be a lie in the transcript. */
+        if (rejection) {
+          await finish(taskId, "failed", rejection);
+          append(taskId, { kind: "status", status: "failed", detail: rejection });
+          return;
+        }
         await finish(taskId, "cancelled", "Stopped by the user.");
         append(taskId, { kind: "status", status: "cancelled", detail: "Stopped by the user." });
         return;
@@ -216,8 +236,10 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
         }
       } catch (err) {
         if (state.abort.signal.aborted) {
-          await finish(taskId, "cancelled", "Stopped by the user.");
-          append(taskId, { kind: "status", status: "cancelled", detail: "Stopped by the user." });
+          const detail = rejection ?? "Stopped by the user.";
+          const status = rejection ? "failed" : "cancelled";
+          await finish(taskId, status, detail);
+          append(taskId, { kind: "status", status, detail });
           return;
         }
         throw err;
@@ -472,6 +494,20 @@ async function finish(taskId: string, status: TaskStatus, error?: string) {
     .update(schema.tasks)
     .set({ status, endedAt: Date.now(), error: error ?? null })
     .where(eq(schema.tasks.id, taskId));
+
+  /* Tell the node the task is over so it frees the slot. A node that is never
+     told fills to its concurrency limit and then rejects every new assignment,
+     which surfaces as unrelated tool failures rather than anything mentioning
+     capacity. */
+  const [task] = await db
+    .select({ nodeId: schema.tasks.nodeId })
+    .from(schema.tasks)
+    .where(eq(schema.tasks.id, taskId))
+    .limit(1);
+
+  if (task?.nodeId && (status === "completed" || status === "failed" || status === "cancelled")) {
+    sendToNode(task.nodeId, { type: "task.release", id: newId(), taskId, status });
+  }
 }
 
 export function summarise(tool: ToolName, args: unknown): string {

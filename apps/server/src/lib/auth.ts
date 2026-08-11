@@ -103,20 +103,42 @@ export async function destroySession(token: string | undefined): Promise<void> {
   await db.delete(schema.sessions).where(eq(schema.sessions.tokenHash, hashToken(token)));
 }
 
-export function sessionCookie(token: string): string {
+/* Secure is decided per request, not from configuration.
+ *
+ * A Secure cookie is silently dropped by the browser over plain HTTP, so
+ * deriving the flag from MAESTRO_PUBLIC_URL means anyone reaching the server
+ * directly on http://127.0.0.1 — which is exactly what happens during local
+ * development against a production .env — can log in successfully and then
+ * appear logged out, with nothing in any log to say why.
+ *
+ * Behind a reverse proxy the connection to the server is plain HTTP even when
+ * the browser used HTTPS, so X-Forwarded-Proto is what actually reflects the
+ * user's connection. */
+export function isSecureRequest(headers: {
+  forwardedProto?: string | null;
+  url: string;
+}): boolean {
+  const forwarded = headers.forwardedProto?.split(",")[0]?.trim().toLowerCase();
+  if (forwarded) return forwarded === "https";
+  return headers.url.startsWith("https://");
+}
+
+function cookie(value: string, maxAgeSeconds: number, secure: boolean): string {
   const parts = [
-    `${SESSION_COOKIE}=${token}`,
+    `${SESSION_COOKIE}=${value}`,
     "HttpOnly",
     "SameSite=Lax",
     "Path=/",
-    `Max-Age=${Math.floor(config.sessionTtlMs / 1000)}`,
+    `Max-Age=${maxAgeSeconds}`,
   ];
-  if (config.secureCookies) parts.push("Secure");
+  if (secure) parts.push("Secure");
   return parts.join("; ");
 }
 
-export function clearedCookie(): string {
-  const parts = [`${SESSION_COOKIE}=`, "HttpOnly", "SameSite=Lax", "Path=/", "Max-Age=0"];
-  if (config.secureCookies) parts.push("Secure");
-  return parts.join("; ");
+export function sessionCookie(token: string, secure: boolean): string {
+  return cookie(token, Math.floor(config.sessionTtlMs / 1000), secure);
+}
+
+export function clearedCookie(secure: boolean): string {
+  return cookie("", 0, secure);
 }
