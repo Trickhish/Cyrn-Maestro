@@ -26,12 +26,17 @@ export type ChatMessage =
   | { role: "assistant"; content: string; toolCalls?: ToolCallRequest[] }
   | { role: "tool"; toolCallId: string; content: string };
 
+export type ReasoningEffort = "low" | "medium" | "high";
+
 export interface ChatRequest {
   model: string;
   messages: ChatMessage[];
   tools?: ToolDefinition[];
   maxTokens?: number;
   temperature?: number;
+  /* Some models refuse a request that does not ask for reasoning. Set from the
+     model's probe result rather than guessed per call. */
+  reasoningEffort?: ReasoningEffort;
 }
 
 export type StreamEvent =
@@ -44,6 +49,13 @@ export type StreamEvent =
 
 export type FinishReason = "stop" | "tool_calls" | "length" | "content_filter" | "error";
 
+export interface ProbeResult {
+  ok: boolean;
+  error?: string;
+  /* True when the model only answered once reasoning was requested. */
+  needsReasoningEffort?: boolean;
+}
+
 export interface ModelInfo {
   id: string;
   contextWindow?: number;
@@ -54,6 +66,9 @@ export interface ModelInfo {
 export interface ProviderAdapter {
   readonly kind: string;
   listModels(): Promise<ModelInfo[]>;
+  /* Cheap check that a listed model can actually be called. Providers routinely
+     advertise models they cannot route, or that need extra parameters. */
+  probe(modelId: string, signal?: AbortSignal): Promise<ProbeResult>;
   stream(request: ChatRequest, signal?: AbortSignal): AsyncGenerator<StreamEvent>;
 }
 

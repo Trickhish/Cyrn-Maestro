@@ -4,7 +4,7 @@ import { TOOL_SCHEMAS, TOOL_DESCRIPTIONS, TOOL_NAMES } from "@maestro/protocol";
 import { db, schema } from "../db";
 import { decryptSecret } from "../lib/crypto";
 import { OpenAICompatibleAdapter } from "./openai";
-import type { ProviderAdapter, ToolDefinition } from "./types";
+import type { ProviderAdapter, ReasoningEffort, ToolDefinition } from "./types";
 
 /* The gateway resolves which provider a task is allowed to use, and hands the
  * loop an adapter. The rule from the README, enforced in exactly one place:
@@ -30,6 +30,9 @@ export interface ResolvedProvider {
   adapter: ProviderAdapter;
   priceInPerMTok?: number;
   priceOutPerMTok?: number;
+  /* Carried from the model's probe result. The loop passes it on every call —
+     without it these models refuse the request outright. */
+  reasoningEffort?: ReasoningEffort;
 }
 
 /* Owner scope, not actor. The member running the task is irrelevant to which
@@ -73,9 +76,15 @@ export async function resolveProvider(
         and(eq(schema.models.providerId, connection.id), eq(schema.models.enabled, true)),
       );
 
+    /* A model that failed its probe is known-broken. Picking one as an
+       automatic default would fail the user's first task for a reason that has
+       nothing to do with what they asked for. A pinned model is still honoured
+       — the user asked for it by name, and the provider error explains itself. */
+    const usable = models.filter((m) => m.probeOk !== false);
+
     const chosen = preferredModel
       ? models.find((m) => m.modelId === preferredModel)
-      : models[0];
+      : (usable.find((m) => m.probeOk === true) ?? usable[0]);
 
     if (!chosen) continue;
 
@@ -86,6 +95,7 @@ export async function resolveProvider(
       adapter: adapterFor(connection),
       priceInPerMTok: chosen.priceInPerMTok ?? undefined,
       priceOutPerMTok: chosen.priceOutPerMTok ?? undefined,
+      reasoningEffort: chosen.needsReasoningEffort ? "low" : undefined,
     };
   }
 

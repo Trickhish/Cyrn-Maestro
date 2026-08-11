@@ -4,11 +4,23 @@ import {
   type ChatMessage,
   type ChatRequest,
   type ModelInfo,
+  type ProbeResult,
   type ProviderAdapter,
+  type ReasoningEffort,
   type StreamEvent,
   type FinishReason,
   type ToolCallRequest,
 } from "./types";
+
+/* The recoverable probe failure: the model refuses a request that does not ask
+   for reasoning, and answers normally once it does. Matched on the provider's
+   own wording, deliberately loosely — the strategy name carries a date stamp
+   that will change. */
+function needsReasoning(message?: string): boolean {
+  if (!message) return false;
+  const lower = message.toLowerCase();
+  return lower.includes("thinking") && lower.includes("enabled");
+}
 
 /* OpenAI chat-completions adapter.
  *
@@ -56,6 +68,59 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     }));
   }
 
+  /* /v1/models over-advertises: a gateway lists models it cannot actually
+     route, and models that refuse a plain request. Asking for a few tokens is
+     the cheapest way to find out, and it is the difference between a model
+     picker that works and one that fails at the first real task.
+   *
+     Two attempts, because the common failure is recoverable: Claude models
+     behind CLIProxyAPI reject a request that does not ask for reasoning, and
+     answer normally once it does. */
+  async probe(modelId: string, signal?: AbortSignal): Promise<ProbeResult> {
+    const plain = await this.probeOnce(modelId, undefined, signal);
+    if (plain.ok) return { ok: true, needsReasoningEffort: false };
+
+    if (!needsReasoning(plain.error)) return plain;
+
+    const withReasoning = await this.probeOnce(modelId, "low", signal);
+    return withReasoning.ok
+      ? { ok: true, needsReasoningEffort: true }
+      : withReasoning;
+  }
+
+  private async probeOnce(
+    modelId: string,
+    reasoningEffort: ReasoningEffort | undefined,
+    signal?: AbortSignal,
+  ): Promise<ProbeResult> {
+    try {
+      const res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: this.headers(),
+        signal,
+        body: JSON.stringify({
+          model: modelId,
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 8,
+          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await providerError(res, "probing a model");
+        return { ok: false, error: err.message };
+      }
+
+      /* Some gateways answer 200 with an error body rather than a status. */
+      const body = (await res.json().catch(() => null)) as { choices?: unknown[] } | null;
+      if (!body?.choices) return { ok: false, error: "The provider returned no completion." };
+
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   async *stream(request: ChatRequest, signal?: AbortSignal): AsyncGenerator<StreamEvent> {
     const res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
       method: "POST",
@@ -84,6 +149,10 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           : {}),
         ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
         ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+        /* The proxy translates this into the upstream model's thinking config.
+           A raw `thinking` block is dropped on the way through, so this is the
+           parameter that actually takes effect. */
+        ...(request.reasoningEffort ? { reasoning_effort: request.reasoningEffort } : {}),
       }),
     });
 

@@ -23,7 +23,8 @@ function adapterFor(response: Response | (() => Response)) {
   return new OpenAICompatibleAdapter({
     baseUrl: "https://provider.test/v1",
     apiKey: "test-key",
-    fetchImpl: (async () => (typeof response === "function" ? response() : response)) as typeof fetch,
+    fetchImpl: (async () =>
+      typeof response === "function" ? response() : response) as unknown as typeof fetch,
   });
 }
 
@@ -274,6 +275,94 @@ describe("errors", () => {
         expect((err as ProviderError).retryable).toBe(true);
       }
     }
+  });
+});
+
+describe("probing a model", () => {
+  function probeAdapter(handler: (body: Record<string, unknown>) => Response) {
+    return new OpenAICompatibleAdapter({
+      baseUrl: "https://provider.test/v1",
+      apiKey: "k",
+      fetchImpl: (async (_url: string, init: RequestInit) =>
+        handler(JSON.parse(String(init.body)))) as unknown as typeof fetch,
+    });
+  }
+
+  const ok = () => new Response(JSON.stringify({ choices: [{ message: { content: "hi" } }] }), { status: 200 });
+  const thinkingError = () =>
+    new Response(
+      JSON.stringify({
+        error: { message: "`clear_thinking_20251015` strategy requires `thinking` to be enabled or adaptive" },
+      }),
+      { status: 400 },
+    );
+
+  test("a model that answers plainly needs no reasoning effort", async () => {
+    const result = await probeAdapter(ok).probe("m");
+    expect(result).toMatchObject({ ok: true, needsReasoningEffort: false });
+  });
+
+  /* The recoverable case: the provider refuses a plain request and answers once
+     reasoning is requested. Seven of this provider's Claude models behave this
+     way, so treating the first failure as final would hide most of the list. */
+  test("retries with reasoning effort and reports that the model needs it", async () => {
+    let calls = 0;
+    const adapter = probeAdapter((body) => {
+      calls++;
+      return body.reasoning_effort ? ok() : thinkingError();
+    });
+
+    expect(await adapter.probe("m")).toMatchObject({ ok: true, needsReasoningEffort: true });
+    expect(calls).toBe(2);
+  });
+
+  /* An unrelated failure must not trigger a second billable request. */
+  test("does not retry a failure that reasoning cannot fix", async () => {
+    let calls = 0;
+    const adapter = probeAdapter(() => {
+      calls++;
+      return new Response(JSON.stringify({ error: { message: "Usage credits are required" } }), { status: 402 });
+    });
+
+    const result = await adapter.probe("m");
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("credits");
+    expect(calls).toBe(1);
+  });
+
+  test("treats a 200 with no choices as a failure", async () => {
+    const result = await probeAdapter(() => new Response(JSON.stringify({ error: "nope" }), { status: 200 })).probe("m");
+    expect(result.ok).toBe(false);
+  });
+
+  test("sends reasoning_effort on a normal completion when asked", async () => {
+    let sent: Record<string, unknown> | undefined;
+    const adapter = new OpenAICompatibleAdapter({
+      baseUrl: "https://provider.test/v1",
+      apiKey: "k",
+      fetchImpl: (async (_url: string, init: RequestInit) => {
+        sent = JSON.parse(String(init.body));
+        return sseResponse([]);
+      }) as unknown as typeof fetch,
+    });
+
+    await collect(adapter.stream({ ...req, reasoningEffort: "low" }));
+    expect(sent!.reasoning_effort).toBe("low");
+  });
+
+  test("omits reasoning_effort when the model does not need it", async () => {
+    let sent: Record<string, unknown> | undefined;
+    const adapter = new OpenAICompatibleAdapter({
+      baseUrl: "https://provider.test/v1",
+      apiKey: "k",
+      fetchImpl: (async (_url: string, init: RequestInit) => {
+        sent = JSON.parse(String(init.body));
+        return sseResponse([]);
+      }) as unknown as typeof fetch,
+    });
+
+    await collect(adapter.stream(req));
+    expect(sent!).not.toHaveProperty("reasoning_effort");
   });
 });
 

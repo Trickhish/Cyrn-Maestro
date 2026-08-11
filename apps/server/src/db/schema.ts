@@ -96,6 +96,21 @@ export const models = sqliteTable(
     priceInPerMTok: real("price_in_per_mtok"),
     priceOutPerMTok: real("price_out_per_mtok"),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    /* A provider's model list over-advertises: it names models it cannot route,
+       and models that need parameters it does not send by default. Probing
+       records the reason so the UI can say why a model is unavailable rather
+       than hiding it and leaving the user to guess. */
+    probedAt: integer("probed_at"),
+    probeOk: integer("probe_ok", { mode: "boolean" }),
+    probeError: text("probe_error"),
+    /* Claude models on CLIProxyAPI refuse a plain request with "clear_thinking
+       strategy requires thinking to be enabled" and succeed once reasoning is
+       requested. Recorded per model because it is a property of the model, not
+       of the provider — sending it unconditionally changes behaviour and cost
+       for models that never needed it. */
+    needsReasoningEffort: integer("needs_reasoning_effort", { mode: "boolean" })
+      .notNull()
+      .default(false),
   },
   (t) => [unique("models_provider_model_unique").on(t.providerId, t.modelId)],
 );

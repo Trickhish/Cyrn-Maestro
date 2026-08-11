@@ -56,6 +56,12 @@ export function cookieFrom(res: Response): string {
   return (res.headers.get("set-cookie") ?? "").split(";")[0];
 }
 
+/* Response.json() is `unknown` under strict TypeScript, which is correct and
+   unhelpful in a test. Assertions are the safety net here, not the type. */
+export async function body<T = Record<string, any>>(res: Response): Promise<T> {
+  return (await res.json()) as T;
+}
+
 /* Registers the first account and returns its session cookie. Most tests need
    a signed-in owner before they can assert anything interesting. */
 export async function signedInOwner(
@@ -67,5 +73,5 @@ export async function signedInOwner(
   if (res.status !== 201) {
     throw new Error(`Could not register the test owner: ${res.status} ${await res.text()}`);
   }
-  return { cookie: cookieFrom(res), actor: (await res.json()).actor };
+  return { cookie: cookieFrom(res), actor: (await body(res)).actor };
 }

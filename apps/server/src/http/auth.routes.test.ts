@@ -1,6 +1,6 @@
 import { expect, test, describe, beforeAll } from "bun:test";
 import { app } from "../app";
-import { resetDatabase, jsonPost as json, cookieFrom } from "../test/harness";
+import { resetDatabase, jsonPost as json, cookieFrom, body } from "../test/harness";
 
 beforeAll(resetDatabase);
 
@@ -12,24 +12,24 @@ describe("registration, while open", () => {
   test("a short password is rejected, naming the field", async () => {
     const res = await app.request("/api/auth/register", json({ email: "x@x.com", password: "short" }));
     expect(res.status).toBe(400);
-    expect((await res.json()).details.password?.[0]).toContain("10 characters");
+    expect((await body(res)).details.password?.[0]).toContain("10 characters");
   });
 
   test("a malformed email is rejected, naming the field", async () => {
     const res = await app.request("/api/auth/register", json({ email: "not-an-email", password: GOOD }));
     expect(res.status).toBe(400);
-    expect((await res.json()).details.email).toBeDefined();
+    expect((await body(res)).details.email).toBeDefined();
   });
 
   test("neither rejection created an account", async () => {
     const res = await app.request("/api/auth/session");
-    expect((await res.json()).registrationOpen).toBe(true);
+    expect((await body(res)).registrationOpen).toBe(true);
   });
 
   test("the first account becomes the instance admin", async () => {
     const res = await app.request("/api/auth/register", json({ email: "first@x.com", password: GOOD }));
     expect(res.status).toBe(201);
-    expect((await res.json()).actor.instanceRole).toBe("instance_admin");
+    expect((await body(res)).actor.instanceRole).toBe("instance_admin");
   });
 });
 
@@ -37,12 +37,12 @@ describe("registration, once closed", () => {
   test("a second account is refused", async () => {
     const res = await app.request("/api/auth/register", json({ email: "second@x.com", password: GOOD }));
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toContain("closed");
+    expect((await body(res)).error).toContain("closed");
   });
 
   test("the instance reports registration as closed", async () => {
     const res = await app.request("/api/auth/session");
-    expect((await res.json()).registrationOpen).toBe(false);
+    expect((await body(res)).registrationOpen).toBe(false);
   });
 });
 
@@ -71,7 +71,7 @@ describe("login", () => {
     const unknown = await app.request("/api/auth/login", json({ email: "nobody@x.com", password: GOOD }));
     const wrong = await app.request("/api/auth/login", json({ email: "first@x.com", password: "wrong-password-here" }));
     expect(unknown.status).toBe(wrong.status);
-    expect(await unknown.json()).toEqual(await wrong.json());
+    expect(await body(unknown)).toEqual(await body(wrong));
   });
 });
 
@@ -82,7 +82,7 @@ describe("sessions", () => {
     const login = await app.request("/api/auth/login", json({ email: "first@x.com", password: GOOD }));
     const res = await app.request("/api/auth/me", { headers: { cookie: cookieFrom(login) } });
     expect(res.status).toBe(200);
-    expect((await res.json()).actor.email).toBe("first@x.com");
+    expect((await body(res)).actor.email).toBe("first@x.com");
   });
 
   test("a forged cookie is rejected", async () => {
