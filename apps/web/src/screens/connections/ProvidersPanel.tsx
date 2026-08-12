@@ -77,6 +77,7 @@ export function ProvidersPanel({
               >
                 {busy === provider.id ? "Probing…" : "Refresh"}
               </button>
+              <RemoveProvider providerId={provider.id} onRemoved={onChanged} />
             </div>
 
             <div className="flex flex-col gap-1">
@@ -167,6 +168,50 @@ function BulkDisable({
         {busy ? "Disabling…" : q ? `Disable ${matches.length}` : "Disable matching"}
       </button>
     </div>
+  );
+}
+
+/* Removing a provider is more consequential than the other removals on this
+ * tab: the key has no read path back out once it is in — "encrypted, and the
+ * gateway decrypts in-process at call time only" — so undoing a mistaken
+ * removal means going and copying the key again from wherever it lives, not
+ * just re-adding a row. A plain one-click button reads the same for this as
+ * for revoking a node, which is free to redo; a second click to confirm
+ * costs one extra tap and buys back the moment to notice the wrong row. */
+function RemoveProvider({ providerId, onRemoved }: { providerId: string; onRemoved: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  if (!confirming) {
+    return (
+      <button type="button" className="btn btn-chip" onClick={() => setConfirming(true)}>
+        Remove
+      </button>
+    );
+  }
+
+  return (
+    <span className="flex items-center gap-1.5">
+      <button
+        type="button"
+        className="btn btn-chip btn-warn"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await api.deleteProvider(providerId);
+            onRemoved();
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Removing…" : "Confirm remove?"}
+      </button>
+      <button type="button" className="btn btn-chip" disabled={busy} onClick={() => setConfirming(false)}>
+        Cancel
+      </button>
+    </span>
   );
 }
 

@@ -417,6 +417,7 @@ export const api = {
     post<{ provider: Provider }>("/providers", body),
   refreshProvider: (id: string) =>
     post<{ count: number; usable: number }>(`/providers/${id}/refresh`),
+  deleteProvider: (id: string) => request<{ ok: true }>(`/providers/${id}`, { method: "DELETE" }),
   setModelTier: (providerId: string, modelId: string, tier: string) =>
     request<{ ok: true }>(`/providers/${providerId}/models/${encodeURIComponent(modelId)}`, {
       method: "PATCH",

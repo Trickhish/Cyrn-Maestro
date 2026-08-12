@@ -266,3 +266,55 @@ describe("enabling and disabling a model", () => {
     expect(await enabledOf("claude-sonnet-5")).toBe(true);
   });
 });
+
+describe("removing a provider", () => {
+  const destroy = (c: string) => app.request(`/api/providers/${providerId}`, withCookie(c, { method: "DELETE" }));
+
+  test("removes it from the list", async () => {
+    const res = await destroy(cookie);
+    expect(res.status).toBe(200);
+
+    const providers = (await body(await app.request("/api/providers", withCookie(cookie)))).providers;
+    expect(providers).toHaveLength(0);
+  });
+
+  /* The key itself has no read path back out, so a mistaken removal cannot be
+     undone by re-reading it — only by re-entering it from wherever it lives.
+     The models are at least meant to disappear cleanly with it. */
+  test("cascades to its models", async () => {
+    await seedModels([{ id: "claude-sonnet-5" }, { id: "claude-haiku-4-5" }]);
+    await destroy(cookie);
+
+    const rows = await db.select().from(schema.models).where(eq(schema.models.providerId, providerId));
+    expect(rows).toEqual([]);
+  });
+
+  test("is recorded in the audit log", async () => {
+    await destroy(cookie);
+    const entries = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, "provider.removed"));
+    expect(entries).toHaveLength(1);
+  });
+
+  test("another user cannot remove your provider", async () => {
+    await db.insert(schema.users).values({
+      id: "stranger3",
+      email: "stranger3@x.com",
+      passwordHash: await Bun.password.hash(PASSWORD, { algorithm: "argon2id" }),
+      instanceRole: "user",
+      status: "active",
+      createdAt: Date.now(),
+    });
+    const strangerCookie = cookieFrom(
+      await app.request("/api/auth/login", json({ email: "stranger3@x.com", password: PASSWORD })),
+    );
+
+    expect((await destroy(strangerCookie)).status).toBe(404);
+    const providers = (await body(await app.request("/api/providers", withCookie(cookie)))).providers;
+    expect(providers).toHaveLength(1);
+  });
+
+  test("a provider that does not exist is a 404", async () => {
+    const res = await app.request("/api/providers/no-such-provider", withCookie(cookie, { method: "DELETE" }));
+    expect(res.status).toBe(404);
+  });
+});
