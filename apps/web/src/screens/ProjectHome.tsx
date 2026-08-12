@@ -27,6 +27,7 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [model, setModel] = useState<string>("");
+  const [nodeId, setNodeId] = useState<string>("");
   const [error, setError] = useState<string>();
 
   async function refresh() {
@@ -54,6 +55,11 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
   }, [project.id]);
 
   const online = nodes.filter((n) => n.status === "online");
+  /* Shown in the "auto" option so the choice is visible before dispatch, not
+     explained afterwards. */
+  const leastLoaded = [...online]
+    .filter((n) => n.runningTasks < n.maxConcurrentTasks)
+    .sort((a, b) => a.runningTasks - b.runningTasks)[0];
   const usableModels = providers.flatMap((p) => p.models.filter((m) => m.probeOk !== false));
   const live = tasks.filter((t) => !["completed", "failed", "cancelled"].includes(t.status));
   const needsYou = live.filter((t) => t.status === "awaiting_approval");
@@ -66,6 +72,7 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
         projectId: project.id,
         prompt,
         model: model || undefined,
+        nodeId: nodeId || undefined,
       });
       await refresh();
       onOpenTask(task.id);
@@ -97,9 +104,25 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
 
           {/* Routing chips: what this task would use, each one changeable. */}
           <div className="flex flex-wrap items-center gap-2">
-            <Chip label="node">
-              {online.length ? online[0].name : "none online"}
-            </Chip>
+            <label className="flex items-center gap-1.5 border rule rounded-md px-2 py-1 bg-surface">
+              <span className="font-mono text-[10px] tracking-[0.1em] uppercase text-faint">node</span>
+              <select
+                value={nodeId}
+                onChange={(e) => setNodeId(e.target.value)}
+                className="bg-transparent text-[12px] text-secondary outline-none max-w-[200px]"
+              >
+                {/* Empty means "let Maestro pick", which today is the least
+                    loaded machine and in v0.4 becomes the router. */}
+                <option value="">
+                  {online.length ? `auto — ${leastLoaded?.name ?? online[0].name}` : "none online"}
+                </option>
+                {online.map((n) => (
+                  <option key={n.id} value={n.id}>
+                    {n.name} ({n.runningTasks}/{n.maxConcurrentTasks})
+                  </option>
+                ))}
+              </select>
+            </label>
 
             <label className="flex items-center gap-1.5 border rule rounded-md px-2 py-1 bg-surface">
               <span className="font-mono text-[10px] tracking-[0.1em] uppercase text-faint">model</span>

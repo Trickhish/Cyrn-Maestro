@@ -12,6 +12,9 @@ import {
   resetRegistry,
   awaitResult,
   subscribeToTask,
+  loadOf,
+  noteAssigned,
+  noteReleased,
   type SocketSession,
 } from "./registry";
 
@@ -165,7 +168,7 @@ describe("registration", () => {
     const second = fakeSocket();
     await handleNodeMessage({}, second, JSON.stringify({ type: "node.register", id: newId(), nodeToken, node: identity, runningTaskIds: ["task-1"] }));
 
-    expect([...onlineNodes(OWNER)[0].runningTaskIds]).toEqual(["task-1"]);
+    expect([...onlineNodes(OWNER)[0].reported]).toEqual(["task-1"]);
   });
 });
 
@@ -278,6 +281,68 @@ describe("routing replies back to the waiting loop", () => {
     );
 
     expect(seen).toEqual(["tool.approval_request", "tool.result"]);
+  });
+});
+
+/* Dispatch has to see an assignment made a second ago. Choosing a node from
+   heartbeat data — up to 20 seconds stale — makes every node look idle in the
+   gap, so tasks dispatched back to back all pile onto whichever sorts first
+   while the rest of the fleet sits doing nothing. */
+describe("capacity accounting", () => {
+  test("an assignment counts immediately, before any heartbeat", async () => {
+    const { session } = await enrolled();
+    const node = onlineNodes(OWNER)[0];
+
+    expect(loadOf(node)).toBe(0);
+    noteAssigned(session.nodeId!, "t1");
+    expect(loadOf(node)).toBe(1);
+    noteAssigned(session.nodeId!, "t2");
+    expect(loadOf(node)).toBe(2);
+  });
+
+  test("releasing frees the slot immediately", async () => {
+    const { session } = await enrolled();
+    const node = onlineNodes(OWNER)[0];
+
+    noteAssigned(session.nodeId!, "t1");
+    noteReleased(session.nodeId!, "t1");
+    expect(loadOf(node)).toBe(0);
+  });
+
+  /* A heartbeat is a snapshot from the past. It may drop a task the node has
+     finished, but it must never wipe an assignment made since it was sent. */
+  test("a heartbeat does not erase an assignment made after it", async () => {
+    const { session } = await enrolled();
+    const node = onlineNodes(OWNER)[0];
+
+    noteAssigned(session.nodeId!, "t-old");
+    noteAssigned(session.nodeId!, "t-new");
+
+    /* The node reports only t-old and t-new — both still running. */
+    await handleNodeMessage(
+      session,
+      fakeSocket(),
+      JSON.stringify({ type: "node.heartbeat", id: newId(), runningTaskIds: ["t-old", "t-new"] }),
+    );
+
+    expect(loadOf(node)).toBe(2);
+  });
+
+  test("a heartbeat drops a task the node has finished", async () => {
+    const { session } = await enrolled();
+    const node = onlineNodes(OWNER)[0];
+
+    noteAssigned(session.nodeId!, "t-done");
+    noteAssigned(session.nodeId!, "t-live");
+
+    await handleNodeMessage(
+      session,
+      fakeSocket(),
+      JSON.stringify({ type: "node.heartbeat", id: newId(), runningTaskIds: ["t-live"] }),
+    );
+
+    expect(loadOf(node)).toBe(1);
+    expect([...node.assigned]).toEqual(["t-live"]);
   });
 });
 

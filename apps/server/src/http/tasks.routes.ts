@@ -4,7 +4,7 @@ import { z } from "zod";
 import { db, schema } from "../db";
 import { append, replayForDisplay, subscribe, lastSeq } from "../tasks/events";
 import { startTask, steer, cancel, decideApproval, isRunning } from "../tasks/runner";
-import { onlineNodes } from "../nodes/registry";
+import { onlineNodes, loadOf, noteAssigned } from "../nodes/registry";
 import { assertCan, projectScope, taskScope } from "../lib/permissions";
 import { BadRequest, NotFound, requireActor, type Env } from "./context";
 
@@ -65,19 +65,30 @@ taskRoutes.post("/", async (c) => {
   if (!scope) throw new NotFound();
   assertCan(actor, "task.run", scope);
 
-  /* Manual dispatch in v0.1: the router lands in v0.4. Until then, pick the
-     named node, or the owner's only online one. */
+  /* Manual dispatch in v0.1: the router lands in v0.4. Until then, honour the
+     named node, or pick the least loaded online one so two tasks dispatched
+     back to back do not pile onto the same machine while another sits idle. */
   const available = onlineNodes(actor.id);
-  const node = parsed.data.nodeId
-    ? available.find((n) => n.nodeId === parsed.data.nodeId)
-    : available[0];
 
-  if (!node) {
-    throw new BadRequest(
-      available.length === 0
-        ? "No node is online. Install one from Fleet → Add node, then try again."
-        : "That node is not online.",
-    );
+  if (available.length === 0) {
+    throw new BadRequest("No node is online. Install one from Fleet → Add node, then try again.");
+  }
+
+  let node;
+  if (parsed.data.nodeId) {
+    node = available.find((n) => n.nodeId === parsed.data.nodeId);
+    if (!node) throw new BadRequest("That node is not online.");
+  } else {
+    const withRoom = available.filter((n) => loadOf(n) < n.maxConcurrentTasks);
+    /* Every node full is worth saying plainly — the alternative is a task that
+       is accepted and then rejected by the node for reasons the user cannot
+       see. */
+    if (withRoom.length === 0) {
+      throw new BadRequest(
+        "Every node is at capacity. Wait for a task to finish, or add another machine.",
+      );
+    }
+    node = withRoom.sort((a, b) => loadOf(a) - loadOf(b))[0];
   }
 
   /* A workspace row per (project, node) so the node knows where to work. */
@@ -101,6 +112,10 @@ taskRoutes.post("/", async (c) => {
           id: crypto.randomUUID(),
           projectId: parsed.data.projectId,
           nodeId: node.nodeId,
+          /* Empty means "the node decides", which it does by joining its
+             workspace root with the project id. Storing the resolved path is
+             the node's job to report back, not the server's to guess — the
+             server does not know the node's filesystem layout. */
           path: "",
           branch: null,
           provisionedAt: Date.now(),
@@ -146,6 +161,10 @@ taskRoutes.post("/", async (c) => {
     workspacePath: workspace.path || "",
     limits: { wallClockMs: 30 * 60 * 1000, maxToolCalls: 200 },
   });
+
+  /* Counted against the node the moment it is sent, so a second dispatch a
+     second later sees it rather than waiting for the next heartbeat. */
+  noteAssigned(node.nodeId, taskId);
 
   void startTask(taskId);
 

@@ -10,7 +10,7 @@ import { config } from "../config";
 import { append, conversationFrom } from "./events";
 import { resolveProvider, toolDefinitions, estimateCost, NoProviderError } from "../providers/gateway";
 import { ProviderError } from "../providers/types";
-import { awaitResult, sendToNode, subscribeToTask, getLiveNode } from "../nodes/registry";
+import { awaitResult, sendToNode, subscribeToTask, getLiveNode, noteReleased } from "../nodes/registry";
 
 /* The agent loop.
  *
@@ -506,6 +506,7 @@ async function finish(taskId: string, status: TaskStatus, error?: string) {
     .limit(1);
 
   if (task?.nodeId && (status === "completed" || status === "failed" || status === "cancelled")) {
+    noteReleased(task.nodeId, taskId);
     sendToNode(task.nodeId, { type: "task.release", id: newId(), taskId, status });
   }
 }

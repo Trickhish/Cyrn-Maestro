@@ -145,7 +145,7 @@ async function fleetStatus(actor: Actor): Promise<string> {
     return [
       node.name,
       connected ? "online" : node.status === "revoked" ? "revoked" : "offline",
-      `${connected?.runningTaskIds.size ?? 0}/${node.maxConcurrentTasks} slots`,
+      `${connected ? Math.max(connected.assigned.size, connected.reported.size) : 0}/${node.maxConcurrentTasks} slots`,
       `${node.os ?? "?"}/${node.arch ?? "?"}`,
       (node.capabilities ?? []).join(","),
     ].join(" · ");

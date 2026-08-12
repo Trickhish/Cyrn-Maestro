@@ -17,9 +17,34 @@ export interface LiveNode {
   name: string;
   ownerUserId: string | null;
   socket: { send(data: string): void; close(): void };
-  runningTaskIds: Set<string>;
+  /* Two views of the same thing, deliberately kept apart.
+   *
+   * `assigned` is what the server has dispatched and not yet released. It is
+   * updated the instant a task is sent, so it is the only correct basis for a
+   * capacity decision — dispatching two tasks a second apart must see the
+   * first one.
+   *
+   * `reported` is what the node said at its last heartbeat, up to 20 seconds
+   * stale. Using it to choose a node makes every node look idle in the gap,
+   * and every task piles onto whichever sorts first. It is kept for display
+   * and for spotting drift between the two. */
+  assigned: Set<string>;
+  reported: Set<string>;
   lastSeenAt: number;
   maxConcurrentTasks: number;
+}
+
+/* What a capacity check should use. */
+export function loadOf(node: LiveNode): number {
+  return node.assigned.size;
+}
+
+export function noteAssigned(nodeId: string, taskId: string): void {
+  live.get(nodeId)?.assigned.add(taskId);
+}
+
+export function noteReleased(nodeId: string, taskId: string): void {
+  live.get(nodeId)?.assigned.delete(taskId);
 }
 
 const live = new Map<string, LiveNode>();
@@ -143,7 +168,13 @@ export async function handleNodeMessage(
       if (node) {
         node.lastSeenAt = Date.now();
         if (message.type === "node.heartbeat") {
-          node.runningTaskIds = new Set(message.runningTaskIds);
+          node.reported = new Set(message.runningTaskIds);
+          /* Drop anything the node no longer reports: a task it finished, or
+             one lost to a restart. Never add from here — an assignment made
+             since the heartbeat was sent would be wiped. */
+          for (const taskId of node.assigned) {
+            if (!node.reported.has(taskId)) node.assigned.delete(taskId);
+          }
           await db
             .update(schema.nodes)
             .set({ lastSeenAt: Date.now(), loadPercent: message.loadPercent ?? null })
@@ -210,7 +241,8 @@ async function enroll(
     name: identity.name,
     ownerUserId: row.ownerUserId,
     socket,
-    runningTaskIds: new Set(),
+    assigned: new Set(),
+    reported: new Set(),
     lastSeenAt: Date.now(),
     maxConcurrentTasks: identity.maxConcurrentTasks,
   });
@@ -261,7 +293,10 @@ async function register(
     name: identity.name,
     ownerUserId: row.ownerUserId,
     socket,
-    runningTaskIds: new Set(runningTaskIds),
+    /* A reconnecting node still believes it is running these; trust it until
+       reconciliation says otherwise, so its slots are not double-booked. */
+    assigned: new Set(runningTaskIds),
+    reported: new Set(runningTaskIds),
     lastSeenAt: Date.now(),
     maxConcurrentTasks: identity.maxConcurrentTasks,
   });

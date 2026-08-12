@@ -3,7 +3,7 @@ import { newId } from "@maestro/protocol";
 import { db, schema } from "../db";
 import { append } from "./events";
 import { isRunning } from "./runner";
-import { sendToNode } from "../nodes/registry";
+import { sendToNode, noteReleased } from "../nodes/registry";
 
 /* Orphan recovery.
  *
@@ -49,6 +49,7 @@ export async function recoverOrphanedTasks(): Promise<number> {
     /* Free the slot on the node too. A node that reconnects still believes it
        is running these, and would refuse new work once it filled up. */
     if (task.nodeId) {
+      noteReleased(task.nodeId, task.id);
       sendToNode(task.nodeId, {
         type: "task.release",
         id: newId(),
@@ -78,6 +79,7 @@ export async function reconcileNode(nodeId: string, nodeBelievesRunning: string[
     const stale = !status || !ACTIVE.includes(status as (typeof ACTIVE)[number]) || !isRunning(taskId);
 
     if (stale) {
+      noteReleased(nodeId, taskId);
       sendToNode(nodeId, {
         type: "task.release",
         id: newId(),

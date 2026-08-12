@@ -27,7 +27,7 @@ nodeRoutes.get("/", async (c) => {
         version: row.version,
         capabilities: row.capabilities,
         maxConcurrentTasks: row.maxConcurrentTasks,
-        runningTasks: live?.runningTaskIds.size ?? 0,
+        runningTasks: live ? Math.max(live.assigned.size, live.reported.size) : 0,
         lastSeenAt: row.lastSeenAt,
         loadPercent: row.loadPercent,
       };
