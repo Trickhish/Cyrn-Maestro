@@ -171,7 +171,32 @@ export interface Organization {
   permissions: string[];
 }
 
+export interface McpServer {
+  id: string;
+  name: string;
+  placement: "server" | "node";
+  transport: "http" | "stdio";
+  url: string | null;
+  command: string | null;
+  args: string[] | null;
+  hasHeaders: boolean;
+  hasEnv: boolean;
+  enabled: boolean;
+  toolAllowlist: string[];
+  approval: "auto" | "ask" | "never";
+  lastError: string | null;
+  lastConnectedAt: number | null;
+}
+
 export const api = {
+  mcpServers: () => request<{ servers: McpServer[] }>("/mcp"),
+  addMcpServer: (body: Record<string, unknown>) => post<{ server: McpServer }>("/mcp", body),
+  mcpTools: (id: string) =>
+    post<{ tools: Array<{ name: string; description: string }>; note?: string }>(`/mcp/${id}/tools`),
+  updateMcpServer: (id: string, body: Record<string, unknown>) =>
+    request<{ ok: true }>(`/mcp/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteMcpServer: (id: string) => request<{ ok: true }>(`/mcp/${id}`, { method: "DELETE" }),
+
   account: () =>
     request<{
       email: string;

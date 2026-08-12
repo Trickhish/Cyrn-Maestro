@@ -392,7 +392,13 @@ export const routingRules = sqliteTable(
   ],
 );
 
-/* MCP servers configured for a project.
+/* MCP servers, owned by a user or an organization.
+ *
+ * Owner-wide rather than per project: a connection to GitHub or a database is
+ * a fact about the team, not about one repository, and configuring it once per
+ * project would mean re-entering the same credential everywhere. The same
+ * (user XOR org) column that gates every other resource decides who can see
+ * and use it.
  *
  * Two placements, chosen by where the thing being reached lives:
  *
@@ -407,9 +413,8 @@ export const mcpServers = sqliteTable(
   "mcp_servers",
   {
     id: id(),
-    projectId: text("project_id")
-      .notNull()
-      .references(() => projects.id, { onDelete: "cascade" }),
+    ownerUserId: text("owner_user_id").references(() => users.id, { onDelete: "cascade" }),
+    ownerOrgId: text("owner_org_id").references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     placement: text("placement", { enum: ["server", "node"] }).notNull(),
     transport: text("transport", { enum: ["http", "stdio"] }).notNull(),
@@ -438,8 +443,13 @@ export const mcpServers = sqliteTable(
     createdAt: now(),
   },
   (t) => [
-    unique("mcp_project_name_unique").on(t.projectId, t.name),
-    index("mcp_project_idx").on(t.projectId),
+    /* The name is the tool namespace, so it has to be unique within whoever
+       owns it — two servers called "github" would produce colliding tool
+       names the model could not tell apart. */
+    unique("mcp_user_name_unique").on(t.ownerUserId, t.name),
+    unique("mcp_org_name_unique").on(t.ownerOrgId, t.name),
+    index("mcp_owner_user_idx").on(t.ownerUserId),
+    index("mcp_owner_org_idx").on(t.ownerOrgId),
   ],
 );
 

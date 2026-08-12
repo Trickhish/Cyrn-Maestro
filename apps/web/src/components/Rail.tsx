@@ -12,7 +12,7 @@ export type View =
   | { name: "project"; projectId: string }
   | { name: "task"; taskId: string }
   | { name: "conductor" }
-  | { name: "fleet" }
+  | { name: "connections"; tab?: "nodes" | "providers" | "mcp" }
   | { name: "activity" }
   | { name: "settings" }
   | { name: "instance" };
@@ -167,11 +167,11 @@ export function Rail({
         <button
           type="button"
           className="rail-item"
-          data-active={view.name === "fleet"}
-          onClick={() => onNavigate({ name: "fleet" })}
+          data-active={view.name === "connections"}
+          onClick={() => onNavigate({ name: "connections" })}
         >
           <FleetIcon />
-          <span className="flex-1">Fleet</span>
+          <span className="flex-1">Connections</span>
         </button>
         {activeOrgId && (
           <button

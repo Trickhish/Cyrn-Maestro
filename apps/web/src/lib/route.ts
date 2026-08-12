@@ -11,7 +11,12 @@ export function viewFromHash(hash: string): View | undefined {
   if (kind === "t" && id) return { name: "task", taskId: id };
   if (kind === "p" && id) return { name: "project", projectId: id };
   if (kind === "conductor") return { name: "conductor" };
-  if (kind === "fleet") return { name: "fleet" };
+  if (kind === "connections") {
+    const tab = id === "providers" || id === "mcp" ? id : "nodes";
+    return { name: "connections", tab };
+  }
+  /* The old name, so links people already have keep working. */
+  if (kind === "fleet") return { name: "connections", tab: "nodes" };
   if (kind === "activity") return { name: "activity" };
   if (kind === "settings") return { name: "settings" };
   if (kind === "instance") return { name: "instance" };
@@ -26,8 +31,8 @@ export function hashFor(view: View): string {
       return `#/p/${view.projectId}`;
     case "conductor":
       return "#/conductor";
-    case "fleet":
-      return "#/fleet";
+    case "connections":
+      return `#/connections/${view.tab ?? "nodes"}`;
     case "activity":
       return "#/activity";
     case "settings":

@@ -183,7 +183,7 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
 
   /* MCP tools are merged into the same list the node's tools live in, so the
      model sees one surface rather than two categories it has to reason about. */
-  const mcp = await resolveMcpTools(task.projectId);
+  const mcp = await resolveMcpTools({ ownerUserId: project.ownerUserId, ownerOrgId: project.ownerOrgId });
   for (const problem of mcp.problems) {
     append(taskId, {
       kind: "log",
@@ -338,7 +338,7 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
         if (call.name === LOAD_SKILL_TOOL.name) {
           await loadSkillCall(taskId, task.nodeId!, call, skills);
         } else if (isMcpTool(call.name) && mcp.tools.some((t) => t.qualifiedName === call.name)) {
-          await mcpCall(taskId, task.projectId, call, mcp.needsApproval, state);
+          await mcpCall(taskId, { ownerUserId: project.ownerUserId, ownerOrgId: project.ownerOrgId }, call, mcp.needsApproval, state);
         } else {
           await executeCall(taskId, task.nodeId!, call, state);
         }
@@ -415,7 +415,7 @@ async function loadSkillCall(
    database over MCP deserves the prompt that `psql` would have got. */
 async function mcpCall(
   taskId: string,
-  projectId: string,
+  owner: { ownerUserId?: string | null; ownerOrgId?: string | null },
   call: { id: string; name: string; argumentsJson: string },
   needsApproval: Set<string>,
   state: RunState,
@@ -484,7 +484,7 @@ async function mcpCall(
   }
 
   const started = Date.now();
-  const result = await runMcpTool(projectId, call.name, args);
+  const result = await runMcpTool(owner, call.name, args);
 
   append(taskId, {
     kind: "tool_result",

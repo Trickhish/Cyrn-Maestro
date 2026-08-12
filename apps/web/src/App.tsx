@@ -6,7 +6,7 @@ import { Rail, type View } from "./components/Rail";
 import { SignIn } from "./screens/SignIn";
 import { ProjectHome } from "./screens/ProjectHome";
 import { LiveThread } from "./screens/LiveThread";
-import { Fleet } from "./screens/Fleet";
+import { Connections } from "./screens/Connections";
 import { Conductor } from "./screens/Conductor";
 import { Activity } from "./screens/Activity";
 import { Settings } from "./screens/Settings";
@@ -19,7 +19,7 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [view, setViewState] = useState<View>(() => viewFromHash(location.hash) ?? { name: "fleet" });
+  const [view, setViewState] = useState<View>(() => viewFromHash(location.hash) ?? { name: "connections", tab: "nodes" });
   const [theme, toggleTheme] = useTheme();
 
   /* Navigation writes the hash; the hash drives the view. That way a pasted
@@ -107,7 +107,15 @@ export default function App() {
         onToggleTheme={toggleTheme}
       />
 
-      {view.name === "fleet" && <Fleet />}
+      {view.name === "connections" && (
+        <Connections
+          tab={view.tab ?? "nodes"}
+          onTab={(tab) => setView({ name: "connections", tab })}
+          ownerLabel={
+            organizations.find((o) => o.id === getActiveOrg())?.name ?? actor.email.split("@")[0]
+          }
+        />
+      )}
 
       {view.name === "settings" && <Settings />}
 
@@ -137,7 +145,7 @@ export default function App() {
           onBack={() => {
             const task = tasks.find((t) => t.id === view.taskId);
             setView(
-              task ? { name: "project", projectId: task.projectId } : { name: "fleet" },
+              task ? { name: "project", projectId: task.projectId } : { name: "connections", tab: "nodes" },
             );
           }}
         />

@@ -3,15 +3,20 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db";
 import { encryptSecret } from "../lib/crypto";
-import { assertCan, projectScope } from "../lib/permissions";
+import { assertCan } from "../lib/permissions";
 import { record } from "../lib/audit";
 import { listTools } from "../mcp/client";
-import { BadRequest, NotFound, requireActor, type Env } from "./context";
+import { BadRequest, NotFound, requireActor, activeScope, type Env } from "./context";
 
 export const mcpRoutes = new Hono<Env>();
 
+function ownedBy(scope: { ownerUserId?: string | null; ownerOrgId?: string | null }) {
+  return scope.ownerOrgId
+    ? eq(schema.mcpServers.ownerOrgId, scope.ownerOrgId)
+    : eq(schema.mcpServers.ownerUserId, scope.ownerUserId!);
+}
+
 const ServerInput = z.object({
-  projectId: z.string(),
   name: z
     .string()
     .min(1)
@@ -35,7 +40,6 @@ const ServerInput = z.object({
 function publicView(row: typeof schema.mcpServers.$inferSelect) {
   return {
     id: row.id,
-    projectId: row.projectId,
     name: row.name,
     placement: row.placement,
     transport: row.transport,
@@ -52,20 +56,15 @@ function publicView(row: typeof schema.mcpServers.$inferSelect) {
   };
 }
 
+/* Owner-wide: whichever organization you are working in, or your own account.
+   A connection to GitHub is a fact about the team rather than about one
+   repository, so it is configured once and available to every project. */
 mcpRoutes.get("/", async (c) => {
   const actor = requireActor(c);
-  const projectId = c.req.query("projectId");
-  if (!projectId) throw new BadRequest("Name a project.");
+  const scope = activeScope(c);
+  await assertCan(actor, "provider.read", scope);
 
-  const scope = await projectScope(projectId);
-  if (!scope) throw new NotFound();
-  await assertCan(actor, "project.read", scope);
-
-  const rows = await db
-    .select()
-    .from(schema.mcpServers)
-    .where(eq(schema.mcpServers.projectId, projectId));
-
+  const rows = await db.select().from(schema.mcpServers).where(ownedBy(scope));
   return c.json({ servers: rows.map(publicView) });
 });
 
@@ -76,11 +75,11 @@ mcpRoutes.post("/", async (c) => {
     throw new BadRequest("Check the form.", z.flattenError(parsed.error).fieldErrors);
   }
 
-  const scope = await projectScope(parsed.data.projectId);
-  if (!scope) throw new NotFound();
-  /* Connecting a tool source changes what every future task in this project can
-     reach, so it is a project change rather than something any member may do. */
-  await assertCan(actor, "project.update", scope);
+  const scope = activeScope(c);
+  /* Connecting a tool source changes what every future task can reach, so it
+     needs the same authority as adding a provider — not something any member
+     may do. */
+  await assertCan(actor, "provider.manage", scope);
 
   const placement = parsed.data.placement;
   if (placement === "server" && !parsed.data.url) {
@@ -92,7 +91,8 @@ mcpRoutes.post("/", async (c) => {
 
   const row = {
     id: crypto.randomUUID(),
-    projectId: parsed.data.projectId,
+    ownerUserId: scope.ownerOrgId ? null : actor.id,
+    ownerOrgId: scope.ownerOrgId,
     name: parsed.data.name,
     placement,
     transport: (placement === "server" ? "http" : "stdio") as "http" | "stdio",
@@ -130,9 +130,8 @@ mcpRoutes.post("/:id/tools", async (c) => {
     .limit(1);
   if (!row) throw new NotFound();
 
-  const scope = await projectScope(row.projectId);
-  if (!scope) throw new NotFound();
-  await assertCan(actor, "project.update", scope);
+  const scope = { ownerUserId: row.ownerUserId, ownerOrgId: row.ownerOrgId };
+  await assertCan(actor, "provider.manage", scope);
 
   if (row.placement === "node") {
     return c.json({ tools: [], note: "Node-side MCP servers are not started yet." });
@@ -177,9 +176,8 @@ mcpRoutes.patch("/:id", async (c) => {
     .limit(1);
   if (!row) throw new NotFound();
 
-  const scope = await projectScope(row.projectId);
-  if (!scope) throw new NotFound();
-  await assertCan(actor, "project.update", scope);
+  const scope = { ownerUserId: row.ownerUserId, ownerOrgId: row.ownerOrgId };
+  await assertCan(actor, "provider.manage", scope);
 
   const parsed = ServerInput.partial().safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) throw new BadRequest("Check the form.");
@@ -215,9 +213,8 @@ mcpRoutes.delete("/:id", async (c) => {
     .limit(1);
   if (!row) throw new NotFound();
 
-  const scope = await projectScope(row.projectId);
-  if (!scope) throw new NotFound();
-  await assertCan(actor, "project.update", scope);
+  const scope = { ownerUserId: row.ownerUserId, ownerOrgId: row.ownerOrgId };
+  await assertCan(actor, "provider.manage", scope);
 
   await db.delete(schema.mcpServers).where(eq(schema.mcpServers.id, row.id));
   await record(scope.ownerOrgId ?? null, actor, "mcp.removed", row.id, { name: row.name });

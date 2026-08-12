@@ -4,7 +4,7 @@ import { decryptSecret } from "../lib/crypto";
 import { listTools, callTool, unqualify, toolDefinitionFor, type McpTool, type HttpServerConfig } from "./client";
 import type { ToolDefinition } from "../providers/types";
 
-/* Resolving a project's MCP tools for one task.
+/* Resolving the owner's MCP tools for one task.
  *
  * v0.5 connects server-side HTTP servers. Node-side stdio placement is stored
  * and shown, but not yet spawned — the honest position is that it is configured
@@ -48,11 +48,24 @@ function configFor(row: typeof schema.mcpServers.$inferSelect): HttpServerConfig
   };
 }
 
-export async function resolveMcpTools(projectId: string): Promise<ResolvedMcp> {
+export interface McpOwner {
+  ownerUserId?: string | null;
+  ownerOrgId?: string | null;
+}
+
+function ownedBy(owner: McpOwner) {
+  return owner.ownerOrgId
+    ? eq(schema.mcpServers.ownerOrgId, owner.ownerOrgId)
+    : eq(schema.mcpServers.ownerUserId, owner.ownerUserId!);
+}
+
+export async function resolveMcpTools(owner: McpOwner): Promise<ResolvedMcp> {
+  if (!owner.ownerOrgId && !owner.ownerUserId) return EMPTY;
+
   const rows = await db
     .select()
     .from(schema.mcpServers)
-    .where(and(eq(schema.mcpServers.projectId, projectId), eq(schema.mcpServers.enabled, true)));
+    .where(and(ownedBy(owner), eq(schema.mcpServers.enabled, true)));
 
   if (rows.length === 0) return EMPTY;
 
@@ -105,7 +118,7 @@ export async function resolveMcpTools(projectId: string): Promise<ResolvedMcp> {
 
 /* Runs one MCP tool call, resolving which server owns it from the namespace. */
 export async function runMcpTool(
-  projectId: string,
+  owner: McpOwner,
   qualifiedName: string,
   args: unknown,
 ): Promise<{ ok: boolean; output: string }> {
@@ -119,7 +132,7 @@ export async function runMcpTool(
     .from(schema.mcpServers)
     .where(
       and(
-        eq(schema.mcpServers.projectId, projectId),
+        ownedBy(owner),
         eq(schema.mcpServers.name, parsed.serverName),
         eq(schema.mcpServers.enabled, true),
       ),
@@ -127,7 +140,7 @@ export async function runMcpTool(
     .limit(1);
 
   if (!row) {
-    return { ok: false, output: `There is no MCP server called "${parsed.serverName}" on this project.` };
+    return { ok: false, output: `There is no MCP server called "${parsed.serverName}" available here.` };
   }
 
   /* The allowlist is a boundary, not a display filter. A model that guesses a
@@ -135,7 +148,7 @@ export async function runMcpTool(
   if (row.toolAllowlist?.length && !row.toolAllowlist.includes(parsed.toolName)) {
     return {
       ok: false,
-      output: `${parsed.toolName} is not enabled for ${parsed.serverName} on this project.`,
+      output: `${parsed.toolName} is not enabled for ${parsed.serverName}.`,
     };
   }
 

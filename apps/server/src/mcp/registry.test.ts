@@ -6,6 +6,7 @@ import { runMcpTool, isMcpTool, resolveMcpTools } from "./registry";
 
 const USER = "u1";
 const PROJECT = "p1";
+const OWNER = { ownerUserId: USER, ownerOrgId: null };
 
 async function seed() {
   const now = Date.now();
@@ -23,7 +24,8 @@ async function seed() {
 async function addServer(over: Partial<typeof schema.mcpServers.$inferInsert> = {}) {
   const row = {
     id: crypto.randomUUID(),
-    projectId: PROJECT,
+    ownerUserId: USER,
+    ownerOrgId: null,
     name: "github",
     placement: "server" as const,
     transport: "http" as const,
@@ -76,7 +78,7 @@ describe("namespacing", () => {
 
 describe("what a call is allowed to reach", () => {
   test("an unknown server is refused by name", async () => {
-    const result = await runMcpTool(PROJECT, "nowhere__do_thing", {});
+    const result = await runMcpTool(OWNER, "nowhere__do_thing", {});
     expect(result.ok).toBe(false);
     expect(result.output).toContain('no MCP server called "nowhere"');
   });
@@ -86,56 +88,73 @@ describe("what a call is allowed to reach", () => {
   test("a tool outside the allowlist cannot be called even if guessed", async () => {
     await addServer({ toolAllowlist: ["create_issue"] });
 
-    const result = await runMcpTool(PROJECT, "github__delete_repo", {});
+    const result = await runMcpTool(OWNER, "github__delete_repo", {});
     expect(result.ok).toBe(false);
     expect(result.output).toContain("not enabled");
   });
 
   test("a server set to never is refused", async () => {
     await addServer({ approval: "never" });
-    const result = await runMcpTool(PROJECT, "github__create_issue", {});
+    const result = await runMcpTool(OWNER, "github__create_issue", {});
     expect(result.ok).toBe(false);
     expect(result.output).toContain("never run tools");
   });
 
   test("a disabled server is refused", async () => {
     await addServer({ enabled: false });
-    const result = await runMcpTool(PROJECT, "github__create_issue", {});
+    const result = await runMcpTool(OWNER, "github__create_issue", {});
     expect(result.ok).toBe(false);
   });
 
-  /* A server belonging to another project must not be reachable by name. */
-  test("a server on a different project is not reachable", async () => {
-    await db.insert(schema.projects).values({
-      id: "p2", ownerUserId: USER, ownerOrgId: null, name: "Other", slug: "other",
-      repoUrl: null, branch: null, instructions: null,
-      defaultModelId: null, defaultTier: null, spendCapUsd: null, createdAt: Date.now(),
+  /* Owner scope is the boundary now: another user's server must not be
+     reachable by naming it, even though the namespace is guessable. */
+  test("a server belonging to another owner is not reachable", async () => {
+    await db.insert(schema.users).values({
+      id: "u2", email: "other@x.com", passwordHash: "x",
+      instanceRole: "user", status: "active", createdAt: Date.now(),
     });
-    await addServer({ projectId: "p2", name: "private" });
+    await addServer({ ownerUserId: "u2", name: "private" });
 
-    const result = await runMcpTool(PROJECT, "private__secret", {});
+    const result = await runMcpTool(OWNER, "private__secret", {});
     expect(result.ok).toBe(false);
     expect(result.output).toContain("no MCP server");
   });
+
+  test("an organization's servers are separate from a member's own", async () => {
+    await db.insert(schema.organizations).values({
+      id: "org1", name: "Acme", slug: "acme", require2fa: false,
+      defaultModelId: null, defaultTier: null, spendCapUsd: null, createdAt: Date.now(),
+    });
+    await addServer({ ownerUserId: null, ownerOrgId: "org1", name: "orgonly" });
+
+    /* The member's own scope cannot reach it… */
+    expect((await runMcpTool(OWNER, "orgonly__x", {})).ok).toBe(false);
+    expect((await resolveMcpTools(OWNER)).problems).toHaveLength(0);
+
+    /* …while the org's scope sees it, and reports it by name when it cannot
+       be reached. */
+    const asOrg = await resolveMcpTools({ ownerOrgId: "org1" });
+    expect(asOrg.problems.map((p) => p.server)).toEqual(["orgonly"]);
+  });
 });
 
-describe("resolving a project's tools", () => {
-  test("a project with no servers gets nothing, and no errors", async () => {
-    const resolved = await resolveMcpTools(PROJECT);
+describe("resolving an owner's tools", () => {
+  test("an owner with no servers gets nothing, and no errors", async () => {
+    const resolved = await resolveMcpTools(OWNER);
     expect(resolved.tools).toHaveLength(0);
     expect(resolved.problems).toHaveLength(0);
   });
 
   test("a server set to never contributes no tools", async () => {
     await addServer({ approval: "never" });
-    expect((await resolveMcpTools(PROJECT)).tools).toHaveLength(0);
+    expect((await resolveMcpTools(OWNER)).tools).toHaveLength(0);
   });
 
   /* Configured-but-inert is stated rather than looking like an empty result. */
   test("a node-placed server reports that it is not started yet", async () => {
     await addServer({ placement: "node", transport: "stdio", command: "npx", url: null });
 
-    const resolved = await resolveMcpTools(PROJECT);
+    const resolved = await resolveMcpTools(OWNER);
     expect(resolved.tools).toHaveLength(0);
     expect(resolved.problems[0].message).toContain("not yet started");
   });
@@ -145,7 +164,7 @@ describe("resolving a project's tools", () => {
   test("an unreachable server becomes a problem and is recorded", async () => {
     await addServer({ url: "http://127.0.0.1:9/" });
 
-    const resolved = await resolveMcpTools(PROJECT);
+    const resolved = await resolveMcpTools(OWNER);
     expect(resolved.tools).toHaveLength(0);
     expect(resolved.problems).toHaveLength(1);
     expect(resolved.problems[0].server).toBe("github");

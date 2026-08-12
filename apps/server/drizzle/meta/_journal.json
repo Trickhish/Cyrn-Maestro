@@ -57,6 +57,13 @@
       "when": 1786522577137,
       "tag": "0007_huge_thaddeus_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786523295013,
+      "tag": "0008_mcp_owner_scope",
+      "breakpoints": true
     }
   ]
 }
