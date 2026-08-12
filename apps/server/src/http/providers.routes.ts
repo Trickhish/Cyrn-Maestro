@@ -178,6 +178,23 @@ providerRoutes.post("/:id/refresh", async (c) => {
       probed = results.length;
       usable = results.filter((r) => r.result.ok).length + (models.length - probed);
 
+      /* Anything the budget did not reach has its verdict cleared rather than
+         keeping the one from a previous run.
+       *
+         Without this a capped refresh is unable to undo itself: a model marked
+         broken once — by a rate limit, an outage, or a bug in the probe — is
+         never re-checked, because it falls outside the budget every time, and
+         so stays excluded from routing permanently. An unknown verdict is
+         honest and self-correcting; a stale one is neither. */
+      const probedIds = new Set(results.map((r) => r.modelId));
+      for (const model of models) {
+        if (probedIds.has(model.id)) continue;
+        await db
+          .update(schema.models)
+          .set({ probeOk: null, probeError: null })
+          .where(and(eq(schema.models.providerId, row.id), eq(schema.models.modelId, model.id)));
+      }
+
       for (const { modelId, result } of results) {
         await db
           .update(schema.models)

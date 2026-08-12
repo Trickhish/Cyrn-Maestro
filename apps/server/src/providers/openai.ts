@@ -111,6 +111,38 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         return { ok: false, error: err.message };
       }
 
+      /* Some gateways stream whatever you ask for.
+       *
+       * A non-streaming request is answered with text/event-stream, so parsing
+       * the body as JSON yields nothing and every model on the gateway looks
+       * broken — which the router then refuses to use. Both shapes have to be
+       * accepted, and a streamed answer is just as much proof that the model
+       * works as a buffered one. */
+      const contentType = res.headers.get("content-type") ?? "";
+
+      if (contentType.includes("text/event-stream")) {
+        const body = await res.text();
+
+        for (const line of body.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim();
+          if (!data || data === "[DONE]") continue;
+
+          try {
+            const frame = JSON.parse(data) as { choices?: unknown[]; error?: unknown };
+            /* A gateway can also report a failure inside a 200 stream. */
+            if (frame.error) {
+              return { ok: false, error: describeStreamedError(frame.error) };
+            }
+            if (frame.choices) return { ok: true };
+          } catch {
+            /* Not a frame worth reading; keep looking. */
+          }
+        }
+
+        return { ok: false, error: "The provider streamed no usable response." };
+      }
+
       /* Some gateways answer 200 with an error body rather than a status. */
       const body = (await res.json().catch(() => null)) as { choices?: unknown[] } | null;
       if (!body?.choices) return { ok: false, error: "The provider returned no completion." };
@@ -286,6 +318,12 @@ function normaliseFinish(reason: string): FinishReason {
     default:
       return "stop";
   }
+}
+
+function describeStreamedError(error: unknown): string {
+  if (typeof error === "string") return error;
+  const message = (error as { message?: unknown } | null)?.message;
+  return typeof message === "string" ? message : JSON.stringify(error).slice(0, 200);
 }
 
 async function providerError(res: Response, doing: string): Promise<ProviderError> {

@@ -330,6 +330,45 @@ describe("probing a model", () => {
     expect(calls).toBe(1);
   });
 
+  /* Some gateways answer a non-streaming request with text/event-stream. Reading
+     that with res.json() yields nothing, so every model on the gateway is marked
+     broken and the router then refuses to use any of them — one wrong assumption
+     disabling a whole provider. */
+  test("accepts a streamed reply to a non-streaming probe", async () => {
+    const adapter = probeAdapter(
+      () =>
+        new Response(
+          'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n',
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        ),
+    );
+    expect(await adapter.probe("m")).toMatchObject({ ok: true });
+  });
+
+  test("reads an error reported inside a 200 stream", async () => {
+    const adapter = probeAdapter(
+      () =>
+        new Response('data: {"error":{"message":"model is cooling down"}}\n\n', {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        }),
+    );
+    const result = await adapter.probe("m");
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("cooling down");
+  });
+
+  test("a stream with no usable frame is a failure, not a pass", async () => {
+    const adapter = probeAdapter(
+      () =>
+        new Response(": ping\n\ndata: [DONE]\n\n", {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        }),
+    );
+    expect((await adapter.probe("m")).ok).toBe(false);
+  });
+
   test("treats a 200 with no choices as a failure", async () => {
     const result = await probeAdapter(() => new Response(JSON.stringify({ error: "nope" }), { status: 200 })).probe("m");
     expect(result.ok).toBe(false);
