@@ -26,10 +26,13 @@ export function SignIn({ registrationOpen, onSignedIn }: SignInProps) {
   const [busy, setBusy] = useState(false);
   const codeRef = useRef<HTMLInputElement>(null);
 
-  /* Focused imperatively rather than with the `autoFocus` prop: the field
-     stays mounted the whole time (see the input below), so there is no mount
-     event for autoFocus to fire on when the code step actually begins — only
-     a class toggle. */
+  /* The code field is visible from the first paint (below) rather than
+     appearing only once a code turns out to be needed — password managers
+     mostly qualify a login form once, at page load, and a field a later
+     re-render inserts can be missed by a full autofill even with the
+     attributes otherwise correct. Focus still moves there once a failed
+     attempt reports one is required, so typing doesn't have to be
+     interrupted by a manual click over from the password field. */
   useEffect(() => {
     if (needsCode) codeRef.current?.focus();
   }, [needsCode]);
@@ -123,10 +126,13 @@ export function SignIn({ registrationOpen, onSignedIn }: SignInProps) {
                 className="w-full bg-surface border rule-default rounded-lg px-3 py-2 text-[13.5px] outline-none focus:border-[var(--border-accent)]"
               />
             ) : (
-              /* Matched to OVH's own working field exactly: type, id, name,
-                 and nothing else — no autocomplete, inputmode, or spellcheck
-                 attributes, since the point of this pass is to rule out
-                 whether one of those was itself the thing stopping autofill. */
+              /* type="number", id="totp", name="totp", nothing else — no
+                 autocomplete, inputmode, or spellcheck. Confirmed against a
+                 real Bitwarden install: none of autocomplete="one-time-code"
+                 (the spec-correct token), keyword-bearing name/id alone, or
+                 making the field visible from page load fixed autofill on
+                 their own — matching this exact, narrower attribute set,
+                 copied from a site autofill is confirmed to work on, did. */
               <input
                 ref={codeRef}
                 type="number"
