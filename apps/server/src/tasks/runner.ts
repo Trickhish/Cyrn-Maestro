@@ -12,6 +12,8 @@ import { resolveProvider, estimateCost, NoProviderError } from "../providers/gat
 import { streamWithFailover } from "./failover";
 import { resolveMcpTools, runMcpTool, isMcpTool } from "../mcp/registry";
 import { collectSkills, fetchSkillBody, skillsPromptSection, recordSkillProblems, LOAD_SKILL_TOOL, type SkillSummary } from "./skills";
+import { KNOWLEDGE_TOOLS, isKnowledgeTool, runKnowledgeTool, knowledgePromptSection } from "./knowledge-tools";
+import { getKnowledge } from "../projects/knowledge";
 import { checkSpend } from "../router/spend";
 import { ProviderError } from "../providers/types";
 import { awaitResult, sendToNode, subscribeToTask, getLiveNode, noteReleased } from "../nodes/registry";
@@ -192,7 +194,17 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
     });
   }
 
-  const system = [SYSTEM_PROMPT, project.instructions, skillsPromptSection(skills)]
+  /* Read once at the top of the task, same as skills: what the project's own
+     tools have already registered, so the model is oriented before its first
+     turn rather than having to ask. */
+  const knowledge = await getKnowledge(project.id);
+
+  const system = [
+    SYSTEM_PROMPT,
+    project.instructions,
+    knowledgePromptSection(knowledge, task.nodeId),
+    skillsPromptSection(skills),
+  ]
     .filter(Boolean)
     .join("\n\n");
   let toolCallCount = 0;
@@ -244,6 +256,7 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
                behind it is an invitation to hallucinate a skill name. */
             extraTools: [
               ...(skills.length > 0 ? [LOAD_SKILL_TOOL as never] : []),
+              ...(KNOWLEDGE_TOOLS as never[]),
               ...mcp.definitions,
             ],
           },
@@ -337,6 +350,8 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
 
         if (call.name === LOAD_SKILL_TOOL.name) {
           await loadSkillCall(taskId, task.nodeId!, call, skills);
+        } else if (isKnowledgeTool(call.name)) {
+          await runKnowledgeTool(taskId, project.id, task.nodeId!, call);
         } else if (isMcpTool(call.name) && mcp.tools.some((t) => t.qualifiedName === call.name)) {
           await mcpCall(taskId, { ownerUserId: project.ownerUserId, ownerOrgId: project.ownerOrgId }, call, mcp.needsApproval, state);
         } else {

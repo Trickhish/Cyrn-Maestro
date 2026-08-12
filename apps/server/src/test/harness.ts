@@ -41,6 +41,7 @@ export function resetDatabase(): void {
     "workspaces",
     "enrollment_tokens",
     "routing_rules",
+    "project_notes",
     "mcp_servers",
     "models",
     "provider_connections",

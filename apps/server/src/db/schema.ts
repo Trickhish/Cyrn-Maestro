@@ -341,6 +341,42 @@ export const workspaces = sqliteTable(
   ],
 );
 
+/* What a project knows about itself, beyond code: where things live, what a
+ * URL or a port means, and anything worth remembering between tasks. A fresh
+ * project usually already exists somewhere — a checkout on a machine, a
+ * staging URL, a port nothing else uses — and re-deriving that from scratch
+ * every conversation is exactly the kind of thing an agent should be able to
+ * write down once and stop asking about.
+ *
+ * "directory" beyond the workspace root (that lives on `workspaces.path`
+ * itself, since it already has exactly this shape), "url" and "port" are
+ * facts with a name — calling set_project_fact again with the same label
+ * replaces the value rather than piling up duplicates, enforced by the unique
+ * index below. "memory" is different in kind: free text, never overwritten,
+ * append-only — so its label is always null, which the unique index leaves
+ * alone (SQLite does not treat two NULLs as equal for uniqueness). */
+export const projectNotes = sqliteTable(
+  "project_notes",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["directory", "url", "port", "memory"] }).notNull(),
+    label: text("label"),
+    value: text("value").notNull(),
+    /* A path or a port is only ever meaningful on one machine; a URL usually
+       is not. Nullable throughout rather than restricted to "directory", so a
+       memory or a URL can still say which node it is about when that matters. */
+    nodeId: text("node_id").references(() => nodes.id, { onDelete: "set null" }),
+    createdAt: now(),
+  },
+  (t) => [
+    index("project_notes_project_idx").on(t.projectId),
+    unique("project_notes_label_unique").on(t.projectId, t.kind, t.label),
+  ],
+);
+
 export const enrollmentTokens = sqliteTable(
   "enrollment_tokens",
   {

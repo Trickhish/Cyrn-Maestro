@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type Project, type ProviderModel, type RoutingRule } from "../lib/api";
 import { CapCoverage } from "../components/CapCoverage";
+import { ProjectKnowledge } from "./ProjectKnowledge";
 
 /* Project settings: the middle rungs of the override ladder.
  *
@@ -36,6 +37,8 @@ export function ProjectSettings({ project, onChanged }: { project: Project; onCh
 
   return (
     <div className="flex flex-col gap-8 max-w-[680px]">
+      <ProjectKnowledge project={project} nodes={nodes} />
+
       <section className="flex flex-col gap-3">
         <div className="flex flex-col gap-1">
           <h2 className="font-mono text-[10px] tracking-[0.14em] uppercase text-faint">Defaults</h2>

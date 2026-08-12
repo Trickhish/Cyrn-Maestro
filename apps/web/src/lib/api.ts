@@ -168,6 +168,31 @@ export interface Provider {
 
 /* ------------------------------------------------------------------- calls */
 
+export interface WorkspaceEntry {
+  nodeId: string;
+  nodeName: string;
+  path: string;
+  provisionedAt: number | null;
+}
+
+export interface ProjectNote {
+  id: string;
+  kind: "directory" | "url" | "port" | "memory";
+  label: string | null;
+  value: string;
+  nodeId: string | null;
+  nodeName: string | null;
+  createdAt: number;
+}
+
+export interface ProjectKnowledge {
+  /* The same field as Project.instructions — a project's brief and its
+     standing instructions are one thing, prepended to every task. */
+  brief: string | null;
+  workspaces: WorkspaceEntry[];
+  notes: ProjectNote[];
+}
+
 export interface Organization {
   id: string;
   name: string;
@@ -346,6 +371,30 @@ export const api = {
     }),
   reclassifyModels: (providerId: string) =>
     post<{ reclassified: number }>(`/providers/${providerId}/models/reclassify`),
+
+  knowledge: (projectId: string) =>
+    request<ProjectKnowledge>(`/knowledge?projectId=${encodeURIComponent(projectId)}`),
+  setProjectBrief: (projectId: string, text: string | null) =>
+    request<{ ok: true }>("/knowledge/brief", {
+      method: "PUT",
+      body: JSON.stringify({ projectId, text }),
+    }),
+  setWorkspacePath: (projectId: string, nodeId: string, path: string) =>
+    request<{ ok: true }>("/knowledge/workspace", {
+      method: "PUT",
+      body: JSON.stringify({ projectId, nodeId, path }),
+    }),
+  addProjectFact: (
+    projectId: string,
+    kind: "directory" | "url" | "port",
+    label: string,
+    value: string,
+    nodeId?: string | null,
+  ) => post<{ id: string }>("/knowledge/facts", { projectId, kind, label, value, nodeId }),
+  addProjectMemory: (projectId: string, text: string) =>
+    post<{ id: string }>("/knowledge/memories", { projectId, text }),
+  deleteProjectNote: (id: string) =>
+    request<{ ok: true }>(`/knowledge/notes/${id}`, { method: "DELETE" }),
 
   tasks: (projectId?: string) =>
     request<{ tasks: TaskSummary[] }>(`/tasks${projectId ? `?projectId=${projectId}` : ""}`),

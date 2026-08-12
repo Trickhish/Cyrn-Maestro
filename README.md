@@ -207,7 +207,7 @@ A project owns:
 
 - **Its owner** — a user or an organization. This decides who can see it, which nodes can host it, and whose provider accounts pay for its inference.
 - **Its repository** — URL, default branch, and how to check it out.
-- **Its workspaces** — which nodes carry a checkout, and where. Adding a node to a project sends a `workspace.provision` and the clone happens without you touching the machine.
+- **Its workspaces** — which nodes carry a checkout, and where. Adding a node to a project sends a `workspace.provision` and the clone happens without you touching the machine — or, for a project that already exists somewhere, the path can be registered directly instead of starting a fresh checkout (below).
 - **Its models** — the default tier, any pinned model, spend caps, and which of the owner's providers it is allowed to use.
 - **Its skills** — the ones committed in the repo under `.maestro/skills/`, plus any shared skills you attach (§7.1).
 - **Its MCP servers** — remote ones connected by the server, local ones spawned on its nodes (§7.2).
@@ -229,6 +229,20 @@ your-project/
 ```
 
 Anything under `.maestro/` is versioned with the code, so a project's agent configuration travels with the branch and is reviewable in a pull request.
+
+### 4.1 What a project knows about itself
+
+A project usually already exists somewhere before Maestro is ever pointed at it — a checkout on a machine, a staging URL, a port nothing else is using — and re-explaining that in every conversation is the kind of thing that should be written down once. Project settings has a panel for it, and it is backed by the same tools the agent has:
+
+| Tool | Effect |
+| --- | --- |
+| `set_project_brief` | Sets the project's instructions (above) — a description prepended to every future task. |
+| `set_workspace_path` | Registers where the project already lives on the machine the current task is running on. Takes effect for tasks dispatched to that machine from now on, not the one currently running — a task's workspace is fixed for its own lifetime. |
+| `add_project_fact` | A labelled directory, URL, or port. Registering the same label again replaces the value, so "docs" or "staging" has one current answer rather than a history of every one it ever had. |
+| `remember` | Free text, always appended — a decision made, something learned about how the project works. |
+| `forget` | Removes a fact or memory by id. |
+
+None of these touch a file, a shell, or a network address — they only ever write to Maestro's own record of the project — so none needs approval. What is already known is folded into the system prompt automatically, so a task is oriented before its first turn: told to continue a project it has never seen, an agent can register where it lives and what matters about it, and the next task on that project starts already knowing.
 
 ---
 

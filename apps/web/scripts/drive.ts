@@ -81,6 +81,19 @@ await send(
 );
 await send("Runtime.enable", {}, sessionId);
 
+/* Same idea as the cookie below, for localStorage: the org switcher reads it
+   once on mount, so setting it from the page script means reloading to make it
+   count — and a reload aborts whatever else that script was going to do (a
+   subsequent click, say). Injected before navigation instead, so the app never
+   mounts in the wrong scope in the first place. */
+if (process.env.DRIVE_ORG) {
+  await send(
+    "Page.addScriptToEvaluateOnNewDocument",
+    { source: `localStorage.setItem('maestro.org', ${JSON.stringify(process.env.DRIVE_ORG)});` },
+    sessionId,
+  );
+}
+
 /* A session cookie set before the first navigation, so the app mounts already
    signed in. Setting it from the page script instead means reloading to make it
    count, and a reload throws away whatever else that script was going to do. */

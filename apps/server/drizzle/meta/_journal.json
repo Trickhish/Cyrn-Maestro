@@ -71,6 +71,13 @@
       "when": 1786539169180,
       "tag": "0009_model_price_source",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1786542236989,
+      "tag": "0010_project_notes",
+      "breakpoints": true
     }
   ]
 }
