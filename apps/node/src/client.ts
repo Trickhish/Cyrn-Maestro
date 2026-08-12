@@ -28,10 +28,11 @@ export interface ClientOptions {
   /* Injected in tests. */
   socketFactory?: (url: string) => WebSocket;
   onStateChange?: (state: ClientState) => void;
-  /* Fired once the durable token is on disk. The installer uses this to stop
-     here and hand the machine over to the service manager, rather than leaving
-     an enrollment process running that systemd knows nothing about. */
-  onEnrolled?: () => void;
+  /* Fired once this machine has a working identity, whether it just enrolled
+     or was already registered. The installer uses it to stop here and hand the
+     machine to the service manager, rather than leaving a process running that
+     systemd knows nothing about. */
+  onIdentified?: () => void;
 }
 
 export type ClientState = "connecting" | "enrolling" | "online" | "offline";
@@ -43,9 +44,16 @@ export class NodeClient {
   private stopped = false;
   private heartbeat?: ReturnType<typeof setInterval>;
   private readonly running = new Map<string, { workspace: Workspace; abort: AbortController }>();
+  /* Someone who ran an install command means "enrol this machine", so an
+     explicit enrollment token outranks whatever is already in the config. A
+     machine that was revoked and is being re-added still holds its old token,
+     and preferring that token silently re-registers it as the revoked node —
+     the new token never even reaches the server. */
+  private preferEnrollment: boolean;
 
   constructor(private readonly options: ClientOptions = {}) {
     this.config = loadConfig(options.configPath);
+    this.preferEnrollment = Boolean(options.enrollmentToken);
   }
 
   start(): void {
@@ -68,7 +76,11 @@ export class NodeClient {
   private connect(): void {
     if (this.stopped) return;
 
-    this.setState(this.config.nodeToken ? "connecting" : "enrolling");
+    /* Reported as what it is about to do, not as what the config alone
+       suggests: a machine re-enrolling with a fresh token still has an old
+       one on disk, and calling that "connecting" hides which token is in
+       play at exactly the moment someone is trying to work that out. */
+    this.setState(this.willEnroll() ? "enrolling" : "connecting");
 
     const socket = this.options.socketFactory
       ? this.options.socketFactory(this.config.serverUrl)
@@ -108,8 +120,25 @@ export class NodeClient {
     setTimeout(() => this.connect(), delay);
   }
 
+  private willEnroll(): boolean {
+    return Boolean(this.options.enrollmentToken) && this.preferEnrollment;
+  }
+
   private identify(): void {
     const workspaces = [...this.running.keys()].length ? [] : [];
+
+    /* Bound to a local so the narrowing is visible here, rather than hidden
+       behind a predicate the compiler cannot see through. */
+    const enrollmentToken = this.options.enrollmentToken;
+    if (enrollmentToken && this.preferEnrollment) {
+      this.send({
+        type: "node.enroll",
+        id: newId(),
+        enrollmentToken,
+        node: nodeIdentity(this.config, workspaces),
+      });
+      return;
+    }
 
     if (this.config.nodeToken) {
       this.send({
@@ -167,13 +196,16 @@ export class NodeClient {
         this.config = loadConfig(this.options.configPath);
         console.log(`Enrolled as ${this.config.name}. Token stored.`);
         this.setState("online");
-        this.options.onEnrolled?.();
+        this.options.onIdentified?.();
         break;
       }
 
       case "node.registered": {
         this.setState("online");
         console.log(`Connected to ${this.config.serverUrl}`);
+        /* Also an identity: a machine that was already enrolled is set up, and
+           an installer re-run on it should finish rather than time out. */
+        this.options.onIdentified?.();
         clearInterval(this.heartbeat);
         this.heartbeat = setInterval(() => {
           this.send({
@@ -187,6 +219,19 @@ export class NodeClient {
       }
 
       case "node.rejected": {
+        /* A stale install command run on a machine that is already enrolled and
+           working should not take it down. Falling back to the stored identity
+           keeps it serving; only a machine with no other way in gives up. */
+        if (this.preferEnrollment && this.config.nodeToken) {
+          console.error(
+            `That enrollment token was refused (${message.reason}). ` +
+              "Continuing with the identity this machine already has.",
+          );
+          this.preferEnrollment = false;
+          this.socket?.close();
+          return;
+        }
+
         console.error(`Server rejected this node: ${message.reason}. ${message.detail ?? ""}`);
         /* A bad or revoked token will never become good by retrying. */
         this.stop();

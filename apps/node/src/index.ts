@@ -17,7 +17,7 @@ if (process.argv.includes("--help")) {
 
   --server <url>       WebSocket URL of the Maestro server
   --enroll <token>     One-time enrollment token (first run only)
-  --enroll-only        Enroll, store the token, and exit without serving
+  --enroll-only        Enrol (or confirm this machine's identity) and exit
   --name <name>        This node's name (defaults to the hostname)
   --workspace-root <p> Where project checkouts live
   --config <path>      Config file location
@@ -47,7 +47,7 @@ const client = new NodeClient({
   enrollmentToken: flag("enroll"),
   configPath: process.env.MAESTRO_NODE_CONFIG,
   onStateChange: (state) => console.log(`[node] ${state}`),
-  onEnrolled: enrollOnly
+  onIdentified: enrollOnly
     ? () => {
         client.stop();
         process.exit(0);
