@@ -13,7 +13,8 @@ export type View =
   | { name: "task"; taskId: string }
   | { name: "conductor" }
   | { name: "fleet" }
-  | { name: "activity" };
+  | { name: "activity" }
+  | { name: "settings" };
 
 interface RailProps {
   actor: Actor;
@@ -190,7 +191,8 @@ export function Rail({
         <button
           type="button"
           className="rail-item"
-          onClick={() => api.logout().then(() => location.reload())}
+          data-active={view.name === "settings"}
+          onClick={() => onNavigate({ name: "settings" })}
         >
           <SettingsIcon />
           <span className="flex-1 truncate">{actor.email}</span>

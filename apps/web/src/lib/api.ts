@@ -9,6 +9,10 @@ export class ApiError extends Error {
     message: string,
     readonly status: number,
     readonly details?: Record<string, string[]>,
+    /* Set when the password was accepted but a second factor is still needed,
+       so the sign-in screen can ask for a code instead of implying the
+       password was wrong. */
+    readonly needsSecondFactor?: boolean,
   ) {
     super(message);
     this.name = "ApiError";
@@ -49,6 +53,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       typeof body.error === "string" ? body.error : `Request failed (${res.status}).`,
       res.status,
       body.details as Record<string, string[]> | undefined,
+      body.needsSecondFactor === true,
     );
   }
 
@@ -151,6 +156,28 @@ export interface Organization {
 }
 
 export const api = {
+  account: () =>
+    request<{
+      email: string;
+      instanceRole: string;
+      createdAt: number;
+      twoFactor: { enabled: boolean; enabledAt: number | null; hasRecoveryCodes: boolean };
+    }>("/account"),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    post<{ ok: true }>("/account/password", { currentPassword, newPassword }),
+  sessions: () =>
+    request<{
+      sessions: Array<{
+        id: string; ip: string | null; userAgent: string | null;
+        createdAt: number; expiresAt: number; current: boolean;
+      }>;
+    }>("/account/sessions"),
+  revokeSession: (id: string) => request<{ ok: true }>(`/account/sessions/${id}`, { method: "DELETE" }),
+  revokeOtherSessions: () => post<{ revoked: number }>("/account/sessions/revoke-others"),
+  begin2fa: () => post<{ secret: string; uri: string }>("/account/2fa/begin"),
+  confirm2fa: (code: string) => post<{ recoveryCodes: string[] }>("/account/2fa/confirm", { code }),
+  disable2fa: (password: string) => post<{ ok: true }>("/account/2fa/disable", { password }),
+
   orgs: () => request<{ organizations: Organization[] }>("/orgs"),
   createOrg: (name: string) => post<{ organization: Organization }>("/orgs", { name }),
   members: (orgId: string) =>
@@ -169,7 +196,8 @@ export const api = {
 
   session: () => request<{ actor: Actor | null; registrationOpen: boolean }>("/auth/session"),
   register: (email: string, password: string) => post<{ actor: Actor }>("/auth/register", { email, password }),
-  login: (email: string, password: string) => post<{ actor: Actor }>("/auth/login", { email, password }),
+  login: (email: string, password: string, code?: string) =>
+    post<{ actor: Actor }>("/auth/login", { email, password, ...(code ? { code } : {}) }),
   logout: () => post<{ ok: true }>("/auth/logout"),
 
   projects: () => request<{ projects: Project[] }>("/projects"),

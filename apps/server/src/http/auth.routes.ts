@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { z } from "zod";
 import {
-  authenticate,
+  authenticateFully,
   createSession,
   createUser,
   destroySession,
@@ -16,6 +16,7 @@ import { BadRequest, requireActor, type Env } from "./context";
 import { record } from "../lib/audit";
 
 const Credentials = z.object({
+  code: z.string().optional(),
   email: z.email("That does not look like an email address."),
   /* Long enough to matter, with no composition rules — those push people
      toward "Password1!" and buy nothing. */
@@ -71,7 +72,23 @@ authRoutes.post("/login", async (c) => {
     throw new BadRequest("Enter your email and password.");
   }
 
-  const actor = await authenticate(parsed.data.email, parsed.data.password);
+  const { actor, needsSecondFactor } = await authenticateFully(
+    parsed.data.email,
+    parsed.data.password,
+    parsed.data.code,
+  );
+
+  if (needsSecondFactor) {
+    /* Deliberately distinct from a wrong password: the password WAS right, and
+       pretending otherwise would leave the user retyping it forever. This only
+       reveals that an account has 2FA to someone who already knows its
+       password. */
+    return c.json(
+      { error: "Enter the code from your authenticator app.", needsSecondFactor: true },
+      401,
+    );
+  }
+
   if (!actor) {
     /* One message for both failure modes, so this endpoint cannot be used to
        find out which email addresses have accounts. */

@@ -6,6 +6,7 @@ import { projectRoutes } from "./http/projects.routes";
 import { taskRoutes } from "./http/tasks.routes";
 import { conductorRoutes } from "./http/conductor.routes";
 import { orgRoutes } from "./http/orgs.routes";
+import { accountRoutes } from "./http/account.routes";
 import { installScript, daemonBundle } from "./http/install";
 import { errorResponse, withActor, type Env } from "./http/context";
 import { serveStatic } from "./http/static";
@@ -27,6 +28,7 @@ app.route("/api/projects", projectRoutes);
 app.route("/api/tasks", taskRoutes);
 app.route("/api/conductor", conductorRoutes);
 app.route("/api/orgs", orgRoutes);
+app.route("/api/account", accountRoutes);
 
 /* The one-command install. The token is the path segment, so the script comes
    back already carrying the origin and the token — no editing, no copy-paste

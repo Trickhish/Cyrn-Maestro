@@ -9,6 +9,7 @@ import { LiveThread } from "./screens/LiveThread";
 import { Fleet } from "./screens/Fleet";
 import { Conductor } from "./screens/Conductor";
 import { Activity } from "./screens/Activity";
+import { Settings } from "./screens/Settings";
 
 export default function App() {
   const [actor, setActor] = useState<Actor | null>(null);
@@ -106,6 +107,8 @@ export default function App() {
       />
 
       {view.name === "fleet" && <Fleet />}
+
+      {view.name === "settings" && <Settings />}
 
       {view.name === "activity" && (
         <Activity org={organizations.find((o) => o.id === getActiveOrg())} />

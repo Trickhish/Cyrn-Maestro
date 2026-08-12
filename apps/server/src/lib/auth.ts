@@ -1,7 +1,8 @@
-import { eq, and, gt, count } from "drizzle-orm";
+import { eq, and, gt, count, isNull } from "drizzle-orm";
 import { db, schema } from "../db";
 import { config } from "../config";
-import { hashPassword, verifyPassword, newToken, hashToken } from "./crypto";
+import { hashPassword, verifyPassword, newToken, hashToken, decryptSecret } from "./crypto";
+import { verifyTotp } from "./totp";
 
 export interface Actor {
   id: string;
@@ -36,6 +37,14 @@ export async function createUser(email: string, password: string): Promise<Actor
   return { id: user.id, email: user.email, instanceRole: user.instanceRole };
 }
 
+export interface AuthOutcome {
+  actor: Actor | null;
+  /* The password was right but a second factor is required and was not
+     supplied or did not match. Distinct from a plain failure so the interface
+     can ask for a code rather than claim the password was wrong. */
+  needsSecondFactor?: boolean;
+}
+
 export async function authenticate(email: string, password: string): Promise<Actor | null> {
   const [user] = await db
     .select()
@@ -53,6 +62,55 @@ export async function authenticate(email: string, password: string): Promise<Act
   if (!(await verifyPassword(password, user.passwordHash))) return null;
 
   return { id: user.id, email: user.email, instanceRole: user.instanceRole };
+}
+
+/* Full sign-in, including the second factor when the account has one.
+ *
+ * The code is checked here rather than in the route so there is exactly one
+ * path that can mint a session — a second path that skipped the factor would
+ * be an authentication bypass nobody would notice until it mattered. */
+export async function authenticateFully(
+  email: string,
+  password: string,
+  code: string | undefined,
+): Promise<AuthOutcome> {
+  const actor = await authenticate(email, password);
+  if (!actor) return { actor: null };
+
+  const [user] = await db
+    .select({ totpSecret: schema.users.totpSecret, totpEnabledAt: schema.users.totpEnabledAt })
+    .from(schema.users)
+    .where(eq(schema.users.id, actor.id))
+    .limit(1);
+
+  if (!user?.totpEnabledAt || !user.totpSecret) return { actor };
+
+  if (!code) return { actor: null, needsSecondFactor: true };
+
+  if (verifyTotp(decryptSecret(user.totpSecret), code)) return { actor };
+
+  /* A recovery code is single-use: burning it on use is what stops a leaked
+     backup list from being a permanent spare key. */
+  if (await consumeRecoveryCode(actor.id, code)) return { actor };
+
+  return { actor: null, needsSecondFactor: true };
+}
+
+async function consumeRecoveryCode(userId: string, code: string): Promise<boolean> {
+  const normalised = code.trim().toLowerCase();
+  const consumed = await db
+    .update(schema.recoveryCodes)
+    .set({ usedAt: Date.now() })
+    .where(
+      and(
+        eq(schema.recoveryCodes.userId, userId),
+        eq(schema.recoveryCodes.codeHash, hashToken(normalised)),
+        isNull(schema.recoveryCodes.usedAt),
+      ),
+    )
+    .returning({ id: schema.recoveryCodes.id });
+
+  return consumed.length > 0;
 }
 
 const DUMMY_HASH = await hashPassword(newToken());

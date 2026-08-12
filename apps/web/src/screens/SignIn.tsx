@@ -13,6 +13,8 @@ interface SignInProps {
 export function SignIn({ registrationOpen, onSignedIn }: SignInProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [needsCode, setNeedsCode] = useState(false);
   const [error, setError] = useState<string>();
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [busy, setBusy] = useState(false);
@@ -26,10 +28,15 @@ export function SignIn({ registrationOpen, onSignedIn }: SignInProps) {
     try {
       const { actor } = registrationOpen
         ? await api.register(email, password)
-        : await api.login(email, password);
+        : await api.login(email, password, code || undefined);
       onSignedIn(actor);
     } catch (err) {
       if (err instanceof ApiError) {
+        /* The password was right and only the factor is missing, so ask for a
+           code rather than making the user retype credentials that worked. */
+        if ((err as ApiError & { needsSecondFactor?: boolean }).needsSecondFactor) {
+          setNeedsCode(true);
+        }
         setError(err.message);
         setFieldErrors(err.details ?? {});
       } else {
@@ -81,6 +88,20 @@ export function SignIn({ registrationOpen, onSignedIn }: SignInProps) {
               className="w-full bg-surface border rule-default rounded-lg px-3 py-2 text-[13.5px] outline-none focus:border-[var(--border-accent)]"
             />
           </Field>
+
+          {needsCode && (
+            <Field label="Authenticator code">
+              <input
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                autoFocus
+                placeholder="Six digits, or a recovery code"
+                className="w-full bg-surface border rule-default rounded-lg px-3 py-2 text-[13.5px] outline-none focus:border-[var(--border-accent)]"
+              />
+            </Field>
+          )}
 
           {error && (
             <div className="text-[12.5px] text-bad-hi border border-[var(--border-warn)] bg-raised rounded-lg px-3 py-2">

@@ -13,6 +13,7 @@ export function viewFromHash(hash: string): View | undefined {
   if (kind === "conductor") return { name: "conductor" };
   if (kind === "fleet") return { name: "fleet" };
   if (kind === "activity") return { name: "activity" };
+  if (kind === "settings") return { name: "settings" };
   return undefined;
 }
 
@@ -28,5 +29,7 @@ export function hashFor(view: View): string {
       return "#/fleet";
     case "activity":
       return "#/activity";
+    case "settings":
+      return "#/settings";
   }
 }

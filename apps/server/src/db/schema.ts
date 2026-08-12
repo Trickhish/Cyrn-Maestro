@@ -34,6 +34,10 @@ export const users = sqliteTable(
     status: text("status", { enum: ["active", "suspended"] })
       .notNull()
       .default("active"),
+    /* Encrypted at rest like any other credential: a database leak should not
+       hand over the ability to generate valid second factors. */
+    totpSecret: text("totp_secret"),
+    totpEnabledAt: integer("totp_enabled_at"),
     createdAt: now(),
   },
   (t) => [unique("users_email_unique").on(t.email)],
@@ -92,6 +96,24 @@ export const memberships = sqliteTable(
     unique("memberships_user_org_unique").on(t.userId, t.orgId),
     index("memberships_org_idx").on(t.orgId),
     index("memberships_user_idx").on(t.userId),
+  ],
+);
+
+/* Single-use, hashed, for the day the phone is lost. */
+export const recoveryCodes = sqliteTable(
+  "recovery_codes",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    codeHash: text("code_hash").notNull(),
+    usedAt: integer("used_at"),
+    createdAt: now(),
+  },
+  (t) => [
+    unique("recovery_code_unique").on(t.codeHash),
+    index("recovery_user_idx").on(t.userId),
   ],
 );
 
