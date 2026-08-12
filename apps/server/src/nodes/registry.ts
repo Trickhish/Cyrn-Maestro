@@ -287,6 +287,15 @@ async function register(
       heartbeatIntervalMs: config.heartbeatIntervalMs,
     } satisfies ServerMessage),
   );
+
+  /* The node may still believe it is running tasks whose loops died with a
+     previous server process. Reconcile now, or it holds those slots until it
+     restarts. Imported lazily to keep this module free of a cycle through the
+     runner. */
+  if (runningTaskIds.length > 0) {
+    const { reconcileNode } = await import("../tasks/recovery");
+    await reconcileNode(row.id, runningTaskIds);
+  }
 }
 
 export async function handleDisconnect(session: SocketSession): Promise<void> {

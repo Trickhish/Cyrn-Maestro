@@ -2,8 +2,18 @@ import { app } from "./app";
 import { config } from "./config";
 import { handleNodeMessage, handleDisconnect, type SocketSession } from "./nodes/registry";
 
+import { recoverOrphanedTasks } from "./tasks/recovery";
+
 /* Fail at boot rather than at the first request that needs a key. */
 config.secretKey();
+
+/* Tasks whose loop died with a previous process cannot be resumed, and left
+   alone they show a spinner forever and hold a node slot. Fail them honestly
+   before accepting traffic. */
+const recovered = await recoverOrphanedTasks();
+if (recovered > 0) {
+  console.log(`recovered        ${recovered} task${recovered === 1 ? "" : "s"} orphaned by a restart`);
+}
 
 /* Node sockets are handled by Bun directly rather than through Hono: the
  * upgrade has to happen on the raw request, before any framework has consumed
