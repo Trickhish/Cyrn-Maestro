@@ -92,10 +92,24 @@ export function SignIn({ registrationOpen, onSignedIn }: SignInProps) {
           {needsCode && (
             <Field label="Authenticator code">
               <input
+                /* name/id and autocomplete together are what a password
+                   manager's extension keys its TOTP-field detection on —
+                   Bitwarden reads autocomplete="one-time-code" per the
+                   WHATWG token, but also cross-checks name/id against its own
+                   keyword list, so both are set rather than relying on either
+                   alone. type="text" is explicit for the same reason: some
+                   extensions branch on the literal `.type` of the element and
+                   an unset attribute is not reliably "text" to all of them. */
+                type="text"
+                name="one-time-code"
+                id="totp-code"
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
                 inputMode="numeric"
                 autoComplete="one-time-code"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 autoFocus
                 placeholder="Six digits, or a recovery code"
                 className="w-full bg-surface border rule-default rounded-lg px-3 py-2 text-[13.5px] outline-none focus:border-[var(--border-accent)]"
