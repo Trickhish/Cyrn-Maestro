@@ -20,6 +20,7 @@ const LABELS: Record<string, string> = {
   "provider.removed": "removed a provider",
   "node.enrollment_created": "created a node install token",
   "node.revoked": "revoked node",
+  "node.renamed": "renamed a node",
   "task.approved": "approved a command in",
   "task.denied": "denied a command in",
   "auth.signed_in": "signed in",

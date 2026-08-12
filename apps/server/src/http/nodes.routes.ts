@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db";
 import { config } from "../config";
-import { createEnrollmentToken, revokeNode, getLiveNode } from "../nodes/registry";
+import { createEnrollmentToken, revokeNode, getLiveNode, renameLiveNode } from "../nodes/registry";
 import { assertCan, nodeScope, projectScope } from "../lib/permissions";
 import { record } from "../lib/audit";
 import { BadRequest, NotFound, requireActor, activeScope, type Env } from "./context";
@@ -78,6 +78,36 @@ nodeRoutes.post("/enroll", async (c) => {
     expiresInMs: config.enrollmentTtlMs,
     command: `curl -fsSL ${config.publicUrl}/install/${token} | sh`,
   });
+});
+
+const RenameNode = z.object({ name: z.string().trim().min(1).max(60) });
+
+/* Renaming does not touch the daemon at all — it is a label on the record, not
+   an identity change. The install-time name (the hostname, or an explicit
+   --name) is often not the name someone wants to see in a list of five nodes,
+   and there is no reason renaming should require reinstalling. */
+nodeRoutes.patch("/:id", async (c) => {
+  const actor = requireActor(c);
+  const scope = await nodeScope(c.req.param("id"));
+  if (!scope) throw new NotFound();
+  await assertCan(actor, "node.revoke", scope);
+
+  const parsed = RenameNode.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) throw new BadRequest("Give it a name.");
+
+  const updated = await db
+    .update(schema.nodes)
+    .set({ name: parsed.data.name })
+    .where(eq(schema.nodes.id, c.req.param("id")))
+    .returning({ id: schema.nodes.id });
+  if (updated.length === 0) throw new NotFound();
+
+  renameLiveNode(c.req.param("id"), parsed.data.name);
+  await record(scope.ownerOrgId ?? null, actor, "node.renamed", c.req.param("id"), {
+    name: parsed.data.name,
+  });
+
+  return c.json({ ok: true });
 });
 
 nodeRoutes.delete("/:id", async (c) => {

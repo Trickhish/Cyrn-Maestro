@@ -321,6 +321,8 @@ export const api = {
   nodes: () => request<{ nodes: NodeSummary[] }>("/nodes"),
   enrollNode: (projectId?: string) =>
     post<{ token: string; command: string; expiresInMs: number }>("/nodes/enroll", { projectId }),
+  renameNode: (id: string, name: string) =>
+    request<{ ok: true }>(`/nodes/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   revokeNode: (id: string) => request<{ ok: true }>(`/nodes/${id}`, { method: "DELETE" }),
 
   providers: () => request<{ providers: Provider[] }>("/providers"),

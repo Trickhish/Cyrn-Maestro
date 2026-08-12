@@ -380,4 +380,38 @@ describe("revocation and disconnect", () => {
     const [row] = await db.select().from(schema.nodes).limit(1);
     expect(row.status).toBe("offline");
   });
+
+  /* revokeNode() closes the node's own socket, and that close is exactly what
+     fires the server's disconnect handler in production — the two run in the
+     same sequence the real server produces, unlike the tests above which
+     exercise each in isolation. handleDisconnect() must not be allowed to
+     downgrade "revoked" back to "offline", or the durable token stays live and
+     the daemon's own reconnect re-registers the node a moment later: revoking
+     it visibly does nothing. */
+  test("a disconnect fired by the revocation itself does not undo it", async () => {
+    const { socket, session } = await enrolled();
+    const nodeToken = socket.ofType("node.enrolled").nodeToken;
+
+    await revokeNode(session.nodeId!, { ownerUserId: OWNER });
+    await handleDisconnect(session);
+
+    const [row] = await db.select().from(schema.nodes).where(eq(schema.nodes.id, session.nodeId!));
+    expect(row.status).toBe("revoked");
+
+    const retry = fakeSocket();
+    await handleNodeMessage(
+      {},
+      retry,
+      JSON.stringify({ type: "node.register", id: newId(), nodeToken, node: identity, runningTaskIds: [] }),
+    );
+    expect(retry.last().reason).toBe("revoked");
+  });
+
+  test("an ordinary disconnect still marks the node offline, not revoked", async () => {
+    const { session } = await enrolled();
+    await handleDisconnect(session);
+
+    const [row] = await db.select().from(schema.nodes).where(eq(schema.nodes.id, session.nodeId!));
+    expect(row.status).toBe("offline");
+  });
 });

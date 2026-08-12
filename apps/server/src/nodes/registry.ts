@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { NodeMessage, newId, type ServerMessage, type NodeIdentity } from "@maestro/protocol";
 import { db, schema } from "../db";
 import { config } from "../config";
@@ -67,6 +67,16 @@ export function onlineNodes(owner: { ownerUserId?: string | null; ownerOrgId?: s
 
 export function getLiveNode(nodeId: string): LiveNode | undefined {
   return live.get(nodeId);
+}
+
+/* The name in the database is renamed by a person; the name here is what the
+   daemon announced at connect, and everything mid-flight — a routing decision,
+   a task's "assigned to" — reads the live one, not the row. Without this, a
+   rename would not show up in either place until the node happened to
+   reconnect on its own. */
+export function renameLiveNode(nodeId: string, name: string): void {
+  const node = live.get(nodeId);
+  if (node) node.name = name;
 }
 
 export function sendToNode(nodeId: string, message: ServerMessage): boolean {
@@ -345,10 +355,15 @@ async function register(
 export async function handleDisconnect(session: SocketSession): Promise<void> {
   if (!session.nodeId) return;
   live.delete(session.nodeId);
+  /* Revoking a node closes its socket itself, which fires this same handler —
+     and revocation must win that race. Without the guard, "offline" overwrites
+     "revoked" here, the durable token is still valid, and the daemon's own
+     reconnect re-registers it a moment later: the node comes straight back,
+     which reads as revoke not working at all. */
   await db
     .update(schema.nodes)
     .set({ status: "offline", lastSeenAt: Date.now() })
-    .where(eq(schema.nodes.id, session.nodeId));
+    .where(and(eq(schema.nodes.id, session.nodeId), ne(schema.nodes.status, "revoked")));
 }
 
 export async function createEnrollmentToken(
