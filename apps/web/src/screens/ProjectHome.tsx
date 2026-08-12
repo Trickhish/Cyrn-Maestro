@@ -10,6 +10,7 @@ import {
 } from "../lib/api";
 import { Composer } from "../components/Composer";
 import { RoutingChips } from "../components/RoutingChips";
+import { ProjectSettings } from "./ProjectSettings";
 
 /* The screen you land on: a composer, then what is running, then what ran.
  *
@@ -30,6 +31,7 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
   const [model, setModel] = useState<string>("");
   const [nodeId, setNodeId] = useState<string>("");
   const [draft, setDraft] = useState("");
+  const [tab, setTab] = useState<"tasks" | "settings">("tasks");
   const [error, setError] = useState<string>();
 
   async function refresh() {
@@ -79,11 +81,32 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
           {online.length} node{online.length === 1 ? "" : "s"} online
         </span>
         <span className="flex-1" />
-        <span className="font-mono text-[11px] text-tertiary tnum">
+        <button
+          type="button"
+          className="tab"
+          data-active={tab === "tasks"}
+          onClick={() => setTab("tasks")}
+        >
+          Tasks
+        </button>
+        <button
+          type="button"
+          className="tab"
+          data-active={tab === "settings"}
+          onClick={() => setTab("settings")}
+        >
+          Settings
+        </button>
+        <span className="font-mono text-[11px] text-tertiary tnum ml-2">
           {live.length} running · {needsYou.length} need you
         </span>
       </header>
 
+      {tab === "settings" ? (
+        <div className="px-[26px] py-6">
+          <ProjectSettings project={project} onChanged={() => void refresh()} />
+        </div>
+      ) : (
       <div className="px-[26px] py-6 flex flex-col gap-7 max-w-[860px]">
         <div className="flex flex-col gap-2.5">
           <Composer
@@ -144,6 +167,7 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
           </div>
         )}
       </div>
+      )}
     </section>
   );
 }

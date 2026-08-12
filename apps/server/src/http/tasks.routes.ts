@@ -71,19 +71,12 @@ taskRoutes.post("/", async (c) => {
      the caller wins; otherwise it scores what is actually available now.
      Nodes belong to whoever owns the PROJECT, not to whoever pressed the
      button — a member's personal laptop is not org capacity. */
-  const [projectRow] = await db
-    .select({ defaultModelId: schema.projects.defaultModelId })
-    .from(schema.projects)
-    .where(eq(schema.projects.id, parsed.data.projectId))
-    .limit(1);
-
   const plan = await planRoute({
     owner: scope,
     prompt: parsed.data.prompt,
     projectId: parsed.data.projectId,
     pinnedNodeId: parsed.data.nodeId ?? null,
     pinnedModel: parsed.data.model ?? null,
-    projectDefaultModel: projectRow?.defaultModelId ?? null,
   });
 
   if (plan.blocked || !plan.node || !plan.model) {
@@ -212,12 +205,6 @@ taskRoutes.post("/plan", async (c) => {
   if (!scope) throw new NotFound();
   await assertCan(actor, "task.read", scope);
 
-  const [row] = await db
-    .select({ defaultModelId: schema.projects.defaultModelId })
-    .from(schema.projects)
-    .where(eq(schema.projects.id, parsed.data.projectId))
-    .limit(1);
-
   return c.json(
     await planRoute({
       owner: scope,
@@ -225,8 +212,7 @@ taskRoutes.post("/plan", async (c) => {
       projectId: parsed.data.projectId,
       pinnedNodeId: parsed.data.nodeId ?? null,
       pinnedModel: parsed.data.model ?? null,
-      projectDefaultModel: row?.defaultModelId ?? null,
-    }),
+      }),
   );
 });
 

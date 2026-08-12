@@ -40,6 +40,7 @@ export function resetDatabase(): void {
     "tasks",
     "workspaces",
     "enrollment_tokens",
+    "routing_rules",
     "models",
     "provider_connections",
     "nodes",

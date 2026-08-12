@@ -2,6 +2,7 @@ import { and, eq, desc, gte } from "drizzle-orm";
 import { db, schema } from "../db";
 import { onlineNodes, loadOf, type LiveNode } from "../nodes/registry";
 import { weighTask, acceptableTiers, inferTier, type Tier } from "./weigh";
+import { resolveDefaults, type Defaults } from "./rules";
 
 /* The router.
  *
@@ -31,6 +32,9 @@ export interface RoutingPlan {
      about it. */
   blocked?: string;
   estimateUsd?: number;
+  /* The tightest cap that applies, so the interface can show what a task is
+     running against before it starts spending. */
+  spendCapUsd?: number;
 }
 
 export interface RouteInput {
@@ -39,23 +43,36 @@ export interface RouteInput {
   /* Explicit choices from the caller, which always win over the router. */
   pinnedNodeId?: string | null;
   pinnedModel?: string | null;
-  projectDefaultModel?: string | null;
   projectId: string;
 }
 
 export async function planRoute(input: RouteInput): Promise<RoutingPlan> {
   const weight = weighTask(input.prompt);
 
-  const node = await chooseNode(input);
-  const model = await chooseModel(input, weight.tier);
+  /* Organization defaults, then project defaults, then rules. Each narrows the
+     one above it; the task's own pin, resolved below, narrows all three. */
+  const defaults = await resolveDefaults({
+    projectId: input.projectId,
+    ownerOrgId: input.owner.ownerOrgId,
+    ownerUserId: input.owner.ownerUserId,
+    prompt: input.prompt,
+    weighedTier: weight.tier,
+  });
+
+  const tier = defaults.tier?.value ?? weight.tier;
+  const tierBecause = defaults.tier?.because ?? weight.because;
+
+  const node = await chooseNode(input, defaults);
+  const model = await chooseModel(input, tier, tierBecause, defaults);
 
   const plan: RoutingPlan = {
     node,
     model,
-    tier: model?.picked.tier ?? weight.tier,
+    tier: model?.picked.tier ?? tier,
     /* Writes ask by default. A workspace can opt out on the node, which is
        where the decision belongs — the machine owner decides. */
     approvals: "ask_on_write",
+    spendCapUsd: defaults.spendCapUsd?.value,
   };
 
   if (!node) {
@@ -70,21 +87,29 @@ export async function planRoute(input: RouteInput): Promise<RoutingPlan> {
   return plan;
 }
 
-async function chooseNode(input: RouteInput): Promise<RoutingPlan["node"]> {
+async function chooseNode(
+  input: RouteInput,
+  defaults: Defaults,
+): Promise<RoutingPlan["node"]> {
   const online = onlineNodes(input.owner);
   if (online.length === 0) return null;
 
   const describe = (n: LiveNode) => ({ id: n.nodeId, name: n.name });
 
-  if (input.pinnedNodeId) {
-    const pinned = online.find((n) => n.nodeId === input.pinnedNodeId);
+  /* A pin outranks a rule, which outranks the score. */
+  const forced = input.pinnedNodeId ?? defaults.nodeId?.value;
+  if (forced) {
+    const pinned = online.find((n) => n.nodeId === forced);
     if (pinned) {
       return {
         picked: describe(pinned),
-        because: "you picked this machine",
+        because: input.pinnedNodeId ? "you picked this machine" : defaults.nodeId!.because,
         alternatives: online.filter((n) => n.nodeId !== pinned.nodeId).map(describe),
       };
     }
+    /* A rule naming a node that is offline should not silently pick a
+       different one — but neither should it block the task. Fall through to
+       scoring, and say so. */
   }
 
   const withRoom = online.filter((n) => loadOf(n) < n.maxConcurrentTasks);
@@ -131,7 +156,12 @@ async function chooseNode(input: RouteInput): Promise<RoutingPlan["node"]> {
   };
 }
 
-async function chooseModel(input: RouteInput, tier: Tier): Promise<RoutingPlan["model"]> {
+async function chooseModel(
+  input: RouteInput,
+  tier: Tier,
+  tierBecause: string,
+  defaults: Defaults,
+): Promise<RoutingPlan["model"]> {
   const connections = await db
     .select()
     .from(schema.providerConnections)
@@ -182,12 +212,14 @@ async function chooseModel(input: RouteInput, tier: Tier): Promise<RoutingPlan["
     };
   }
 
-  if (input.projectDefaultModel) {
-    const preferred = usable.find((m) => m.modelId === input.projectDefaultModel);
+  /* A default or a rule names a model; unlike a pin, it yields gracefully if
+     that model is no longer available rather than failing the task. */
+  if (defaults.modelId) {
+    const preferred = usable.find((m) => m.modelId === defaults.modelId!.value);
     if (preferred) {
       return {
         picked: describe(preferred),
-        because: "the project's default model",
+        because: defaults.modelId.because,
         alternatives: usable.filter((m) => m.modelId !== preferred.modelId).slice(0, 6).map(describe),
       };
     }
@@ -222,7 +254,7 @@ async function chooseModel(input: RouteInput, tier: Tier): Promise<RoutingPlan["
   return {
     picked: describe(best.model),
     because: exact
-      ? `${tier} work`
+      ? tierBecause
       : `nothing in the ${tier} tier is available, so a ${best.modelTier} model instead`,
     alternatives: ranked.slice(1, 7).map((entry) => describe(entry.model)),
   };

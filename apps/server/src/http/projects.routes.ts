@@ -13,7 +13,9 @@ const CreateProject = z.object({
   repoUrl: z.string().optional(),
   branch: z.string().optional(),
   instructions: z.string().max(20_000).optional(),
-  defaultModelId: z.string().optional(),
+  defaultModelId: z.string().nullish(),
+  defaultTier: z.enum(["light", "standard", "heavy"]).nullish(),
+  spendCapUsd: z.number().min(0).nullish(),
 });
 
 function slugify(name: string): string {
@@ -80,7 +82,8 @@ projectRoutes.post("/", async (c) => {
     branch: parsed.data.branch ?? "main",
     instructions: parsed.data.instructions ?? null,
     defaultModelId: parsed.data.defaultModelId ?? null,
-    spendCapUsd: null,
+    defaultTier: parsed.data.defaultTier ?? null,
+    spendCapUsd: parsed.data.spendCapUsd ?? null,
     createdAt: Date.now(),
   };
 
@@ -108,6 +111,8 @@ projectRoutes.patch("/:id", async (c) => {
       ...(parsed.data.defaultModelId !== undefined
         ? { defaultModelId: parsed.data.defaultModelId }
         : {}),
+      ...(parsed.data.defaultTier !== undefined ? { defaultTier: parsed.data.defaultTier } : {}),
+      ...(parsed.data.spendCapUsd !== undefined ? { spendCapUsd: parsed.data.spendCapUsd } : {}),
     })
     .where(eq(schema.projects.id, c.req.param("id")));
 

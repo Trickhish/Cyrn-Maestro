@@ -109,6 +109,11 @@ export const organizations = sqliteTable(
     slug: text("slug").notNull(),
     /* An org admin can require it for everyone; enforcement lands with TOTP. */
     require2fa: integer("require_2fa", { mode: "boolean" }).notNull().default(false),
+    /* The outermost ring of the override ladder: what every project in this
+       org gets unless the project, a rule, or the task itself says otherwise. */
+    defaultModelId: text("default_model_id"),
+    defaultTier: text("default_tier", { enum: ["heavy", "standard", "light"] }),
+    spendCapUsd: real("spend_cap_usd"),
     createdAt: now(),
   },
   (t) => [unique("organizations_slug_unique").on(t.slug)],
@@ -271,6 +276,7 @@ export const projects = sqliteTable(
     /* Prepended to every task's system prompt. */
     instructions: text("instructions"),
     defaultModelId: text("default_model_id"),
+    defaultTier: text("default_tier", { enum: ["heavy", "standard", "light"] }),
     spendCapUsd: real("spend_cap_usd"),
     createdAt: now(),
   },
@@ -345,6 +351,45 @@ export const enrollmentTokens = sqliteTable(
     createdAt: now(),
   },
   (t) => [unique("enrollment_token_unique").on(t.tokenHash)],
+);
+
+/* Routing rules.
+ *
+ * Evaluated in priority order, project rules before organization ones, and the
+ * first match wins. A rule is a stated intention — "refactors go to the big
+ * model on the big machine" — which is why the reason it fired is carried into
+ * the routing decision rather than the choice appearing unexplained. */
+export const routingRules = sqliteTable(
+  "routing_rules",
+  {
+    id: id(),
+    /* Exactly one of these: a rule belongs either to one project or to a whole
+       organization. */
+    projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
+    ownerOrgId: text("owner_org_id").references(() => organizations.id, { onDelete: "cascade" }),
+    ownerUserId: text("owner_user_id").references(() => users.id, { onDelete: "cascade" }),
+
+    name: text("name").notNull(),
+    /* Lower runs first. Ties break on creation order, which is stable. */
+    priority: integer("priority").notNull().default(100),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+
+    /* What to match. Null fields are ignored, so a rule with only matchTier
+       fires on every task the router weighed at that tier. */
+    matchText: text("match_text"),
+    matchTier: text("match_tier", { enum: ["heavy", "standard", "light"] }),
+
+    /* What to do. Again, null means "leave it to the next level down". */
+    setTier: text("set_tier", { enum: ["heavy", "standard", "light"] }),
+    setModelId: text("set_model_id"),
+    setNodeId: text("set_node_id").references(() => nodes.id, { onDelete: "set null" }),
+
+    createdAt: now(),
+  },
+  (t) => [
+    index("routing_rules_project_idx").on(t.projectId),
+    index("routing_rules_org_idx").on(t.ownerOrgId),
+  ],
 );
 
 export const tasks = sqliteTable(

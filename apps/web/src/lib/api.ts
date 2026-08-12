@@ -79,6 +79,21 @@ export interface Project {
   branch: string | null;
   instructions: string | null;
   defaultModelId: string | null;
+  defaultTier: "light" | "standard" | "heavy" | null;
+  spendCapUsd: number | null;
+}
+
+export interface RoutingRule {
+  id: string;
+  projectId: string | null;
+  name: string;
+  priority: number;
+  enabled: boolean;
+  matchText: string | null;
+  matchTier: "light" | "standard" | "heavy" | null;
+  setTier: "light" | "standard" | "heavy" | null;
+  setModelId: string | null;
+  setNodeId: string | null;
 }
 
 export interface NodeSummary {
@@ -222,6 +237,15 @@ export const api = {
   projects: () => request<{ projects: Project[] }>("/projects"),
   createProject: (body: { name: string; instructions?: string }) =>
     post<{ project: Project }>("/projects", body),
+  updateProject: (id: string, body: Partial<Project>) =>
+    request<{ project: Project }>(`/projects/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+
+  rules: (projectId: string) => request<{ rules: RoutingRule[] }>(`/rules?projectId=${projectId}`),
+  createRule: (body: Partial<RoutingRule> & { name: string; projectId: string }) =>
+    post<{ rule: RoutingRule }>("/rules", body),
+  updateRule: (id: string, body: Partial<RoutingRule>) =>
+    request<{ ok: true }>(`/rules/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteRule: (id: string) => request<{ ok: true }>(`/rules/${id}`, { method: "DELETE" }),
 
   nodes: () => request<{ nodes: NodeSummary[] }>("/nodes"),
   enrollNode: (projectId?: string) =>
