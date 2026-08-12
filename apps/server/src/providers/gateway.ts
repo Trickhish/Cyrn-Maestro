@@ -35,6 +35,51 @@ export interface ResolvedProvider {
   reasoningEffort?: ReasoningEffort;
 }
 
+/* Candidates for a task, best first: the one the router chose, then the models
+   it would fall back to. Used when a provider rate-limits mid-run — the task
+   moves to the next candidate rather than dying. */
+export async function candidatesFor(
+  owner: { ownerUserId?: string | null; ownerOrgId?: string | null },
+  firstChoice: string,
+): Promise<string[]> {
+  const connections = await db
+    .select()
+    .from(schema.providerConnections)
+    .where(
+      and(
+        owner.ownerOrgId
+          ? eq(schema.providerConnections.ownerOrgId, owner.ownerOrgId)
+          : eq(schema.providerConnections.ownerUserId, owner.ownerUserId!),
+        eq(schema.providerConnections.enabled, true),
+      ),
+    );
+
+  const models = (
+    await Promise.all(
+      connections.map((connection) =>
+        db
+          .select()
+          .from(schema.models)
+          .where(and(eq(schema.models.providerId, connection.id), eq(schema.models.enabled, true))),
+      ),
+    )
+  ).flat();
+
+  const [chosen] = models.filter((m) => m.modelId === firstChoice);
+  const wantedTier = chosen?.tier ?? "standard";
+
+  /* Only same-or-higher tier: falling back to a smaller model would turn a
+     transient rate limit into a quietly worse answer. */
+  const order = { light: 0, standard: 1, heavy: 2 } as const;
+  const fallbacks = models
+    .filter((m) => m.probeOk !== false && m.modelId !== firstChoice)
+    .filter((m) => order[m.tier as keyof typeof order] >= order[wantedTier as keyof typeof order])
+    .sort((a, b) => (a.priceOutPerMTok ?? 0) - (b.priceOutPerMTok ?? 0))
+    .map((m) => m.modelId);
+
+  return [firstChoice, ...fallbacks];
+}
+
 /* Owner scope, not actor. The member running the task is irrelevant to which
    account pays for it. */
 export async function resolveProvider(

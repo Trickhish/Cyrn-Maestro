@@ -8,7 +8,9 @@ import {
 import { db, schema } from "../db";
 import { config } from "../config";
 import { append, conversationFrom } from "./events";
-import { resolveProvider, toolDefinitions, estimateCost, NoProviderError } from "../providers/gateway";
+import { resolveProvider, estimateCost, NoProviderError } from "../providers/gateway";
+import { streamWithFailover } from "./failover";
+import { checkSpend } from "../router/spend";
 import { ProviderError } from "../providers/types";
 import { awaitResult, sendToNode, subscribeToTask, getLiveNode, noteReleased } from "../nodes/registry";
 
@@ -115,8 +117,17 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
     .limit(1);
   if (!project) throw new Error("That task's project no longer exists.");
 
+  /* Checked before a single token is spent. A cap that only stops the next
+     task is not a cap. */
+  const spendBefore = await checkSpend({
+    projectId: task.projectId,
+    ownerOrgId: project.ownerOrgId,
+    ownerUserId: project.ownerUserId,
+  });
+  if (spendBefore.exceeded) throw new Error(spendBefore.exceeded);
+
   /* Whose credentials: the project's owner, never the actor's. */
-  const provider = await resolveProvider(
+  let provider = await resolveProvider(
     { ownerUserId: project.ownerUserId, ownerOrgId: project.ownerOrgId },
     task.model ?? project.defaultModelId,
   );
@@ -199,13 +210,16 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
       let finishReason = "stop";
 
       try {
-        for await (const event of provider.adapter.stream(
+        for await (const event of streamWithFailover(
+          () => provider,
+          (next: typeof provider) => {
+            provider = next;
+          },
           {
-            model: provider.model,
-            messages: [{ role: "system", content: system }, ...messages],
-            tools: toolDefinitions(),
-            maxTokens: 8192,
-            reasoningEffort: provider.reasoningEffort,
+            owner: { ownerUserId: project.ownerUserId, ownerOrgId: project.ownerOrgId },
+            taskId,
+            system,
+            messages,
           },
           state.abort.signal,
         )) {
@@ -227,6 +241,19 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
                 costUsd: cost,
               });
               await bumpUsage(taskId, event.inputTokens, event.outputTokens, cost);
+
+              /* A single long task can cross a cap on its own, so it is checked
+                 again after every call rather than only at dispatch. */
+              const during = await checkSpend({
+                projectId: task.projectId,
+                ownerOrgId: project.ownerOrgId,
+                ownerUserId: project.ownerUserId,
+              });
+              if (during.exceeded) {
+                await finish(taskId, "failed", during.exceeded);
+                append(taskId, { kind: "status", status: "failed", detail: during.exceeded });
+                return;
+              }
               break;
             }
             case "done":
