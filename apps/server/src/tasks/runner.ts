@@ -143,7 +143,7 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
     kind: "routing_decision",
     nodeName: node.name,
     model: provider.model,
-    because: task.model ? "pinned on the task" : "the project's default",
+    because: task.modelPinned ? "pinned on the task" : "the project's default",
   });
 
   await db
@@ -259,6 +259,7 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
               ...(KNOWLEDGE_TOOLS as never[]),
               ...mcp.definitions,
             ],
+            pinned: task.modelPinned,
           },
           state.abort.signal,
         )) {

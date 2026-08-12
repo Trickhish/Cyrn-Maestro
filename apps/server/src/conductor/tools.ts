@@ -3,18 +3,30 @@ import { z } from "zod";
 import { db, schema } from "../db";
 import { getLiveNode, onlineNodes } from "../nodes/registry";
 import { isRunning } from "../tasks/runner";
+import { createTask } from "../tasks/create";
+import { resolveModelList } from "../providers/gateway";
+import { can, projectScope, taskScope } from "../lib/permissions";
 import type { ToolDefinition } from "../providers/types";
 import type { Actor } from "../lib/auth";
 
 /* The Conductor's tools.
  *
  * These are Maestro's own API, not a workspace: no filesystem, no node, no
- * shell. The Conductor answers questions about the fleet and, later, dispatches
- * work — it never edits code itself.
+ * shell. The Conductor answers questions about the fleet, dispatches work to
+ * other models, and reviews what they did — it never edits code itself.
  *
  * Every tool takes the signed-in actor and scopes its query to what that actor
  * owns. The Conductor acts AS the user and is never elevated: it cannot see a
  * project the user cannot see, and asking it to is simply an empty result. */
+
+/* Threaded through every tool call from the request that started the turn.
+   Set when the Conductor is embedded on a specific project's own page, so
+   its tools default to that project instead of making the model guess or
+   ask for an id it was never given. Absent on the global, cross-project
+   screen, where every tool still works — it just needs an explicit id. */
+export interface ConductorContext {
+  projectId?: string;
+}
 
 const ACTIVE = ["queued", "assigned", "running", "awaiting_approval"] as const;
 
@@ -42,6 +54,28 @@ const SpendReport = z.object({
   sinceHours: z.number().int().min(1).max(24 * 90).optional().describe("Defaults to 24."),
 });
 
+const ListModelLists = NoArgs;
+
+const CreateTask = z
+  .object({
+    prompt: z.string().min(1).describe("What the worker model should do."),
+    title: z.string().max(120).optional(),
+    projectId: z
+      .string()
+      .optional()
+      .describe("Defaults to the project this conversation is about, if any."),
+    model: z.string().optional().describe("A specific connected model id to pin this task to."),
+    modelList: z
+      .string()
+      .optional()
+      .describe(
+        "The name of a model list (see list_model_lists) to pick a model from instead of naming one directly.",
+      ),
+  })
+  .refine((v) => !(v.model && v.modelList), {
+    message: "Give a model or a modelList, not both.",
+  });
+
 export const CONDUCTOR_SCHEMAS = {
   list_projects: NoArgs,
   fleet_status: NoArgs,
@@ -49,6 +83,8 @@ export const CONDUCTOR_SCHEMAS = {
   get_task: GetTask,
   search_history: SearchHistory,
   spend_report: SpendReport,
+  list_model_lists: ListModelLists,
+  create_task: CreateTask,
 } as const;
 
 export type ConductorToolName = keyof typeof CONDUCTOR_SCHEMAS;
@@ -60,6 +96,9 @@ const DESCRIPTIONS: Record<ConductorToolName, string> = {
   get_task: "Get one task in detail, including what it did and what it changed.",
   search_history: "Find past tasks by what they were asked to do.",
   spend_report: "Report token usage and cost, broken down by project.",
+  list_model_lists:
+    "List the model profiles set up for this project: a name and when to use it. Check this before choosing a model for create_task.",
+  create_task: "Dispatch a new task to a worker model. Pin a model, name a modelList, or leave both unset to use the project's default routing.",
 };
 
 export function conductorToolDefinitions(): ToolDefinition[] {
@@ -77,6 +116,7 @@ export async function runConductorTool(
   actor: Actor,
   name: string,
   rawArgs: unknown,
+  context: ConductorContext = {},
 ): Promise<string> {
   if (!(name in CONDUCTOR_SCHEMAS)) {
     return `There is no tool called ${name}. Available: ${Object.keys(CONDUCTOR_SCHEMAS).join(", ")}.`;
@@ -93,13 +133,17 @@ export async function runConductorTool(
     case "fleet_status":
       return fleetStatus(actor);
     case "list_tasks":
-      return listTasks(actor, parsed.data as z.infer<typeof ListTasks>);
+      return listTasks(actor, parsed.data as z.infer<typeof ListTasks>, context);
     case "get_task":
       return getTask(actor, parsed.data as z.infer<typeof GetTask>);
     case "search_history":
       return searchHistory(actor, parsed.data as z.infer<typeof SearchHistory>);
     case "spend_report":
       return spendReport(actor, parsed.data as z.infer<typeof SpendReport>);
+    case "list_model_lists":
+      return listModelLists(actor, context);
+    case "create_task":
+      return createTaskTool(actor, parsed.data as z.infer<typeof CreateTask>, context);
   }
 }
 
@@ -154,8 +198,13 @@ async function fleetStatus(actor: Actor): Promise<string> {
   return `${live.length} of ${rows.length} online\n${lines.join("\n")}`;
 }
 
-async function listTasks(actor: Actor, args: z.infer<typeof ListTasks>): Promise<string> {
+async function listTasks(
+  actor: Actor,
+  args: z.infer<typeof ListTasks>,
+  context: ConductorContext,
+): Promise<string> {
   const status = args.status ?? "active";
+  const effectiveProjectId = args.projectId ?? context.projectId;
 
   const statusFilter =
     status === "active"
@@ -185,7 +234,7 @@ async function listTasks(actor: Actor, args: z.infer<typeof ListTasks>): Promise
     .where(
       and(
         eq(schema.projects.ownerUserId, actor.id),
-        ...(args.projectId ? [eq(schema.tasks.projectId, args.projectId)] : []),
+        ...(effectiveProjectId ? [eq(schema.tasks.projectId, effectiveProjectId)] : []),
         ...(statusFilter ? [statusFilter] : []),
       ),
     )
@@ -215,6 +264,14 @@ async function listTasks(actor: Actor, args: z.infer<typeof ListTasks>): Promise
 }
 
 async function getTask(actor: Actor, args: z.infer<typeof GetTask>): Promise<string> {
+  /* taskScope + can, not a hardcoded ownerUserId comparison — a task on an
+     org-owned project is not "not theirs" just because the column it is
+     compared against is the personal one. A task the Conductor itself just
+     dispatched on an org project must be readable back, or "validate" is a
+     promise this tool quietly cannot keep. */
+  const scope = await taskScope(args.taskId);
+  if (!scope || !(await can(actor, "task.read", scope))) return "No such task.";
+
   const [task] = await db
     .select({
       id: schema.tasks.id,
@@ -227,7 +284,6 @@ async function getTask(actor: Actor, args: z.infer<typeof GetTask>): Promise<str
       outputTokens: schema.tasks.outputTokens,
       error: schema.tasks.error,
       projectName: schema.projects.name,
-      ownerUserId: schema.projects.ownerUserId,
     })
     .from(schema.tasks)
     .innerJoin(schema.projects, eq(schema.tasks.projectId, schema.projects.id))
@@ -236,7 +292,7 @@ async function getTask(actor: Actor, args: z.infer<typeof GetTask>): Promise<str
 
   /* Same message whether it does not exist or is not theirs, so the Conductor
      cannot be used to probe for other people's task ids. */
-  if (!task || task.ownerUserId !== actor.id) return "No such task.";
+  if (!task) return "No such task.";
 
   const events = await db
     .select({ kind: schema.taskEvents.kind, payload: schema.taskEvents.payload })
@@ -352,4 +408,68 @@ async function spendReport(actor: Actor, args: z.infer<typeof SpendReport>): Pro
   return `Last ${args.sinceHours ?? 24}h — ${rows.length} tasks · ${totalIn} in / ${totalOut} out${
     totalCost > 0 ? ` · $${totalCost.toFixed(4)}` : ""
   }\n${lines.join("\n")}${note}`;
+}
+
+/* The scope model lists and task dispatch resolve against: the project this
+   conversation is about when there is one (which may be an org's, not the
+   actor's own), otherwise the actor's personal scope. Resolved once so a
+   project embed and the global screen behave consistently. */
+async function scopeFor(context: ConductorContext, actor: Actor) {
+  if (context.projectId) return projectScope(context.projectId);
+  return { ownerUserId: actor.id, ownerOrgId: null };
+}
+
+async function listModelLists(actor: Actor, context: ConductorContext): Promise<string> {
+  const scope = await scopeFor(context, actor);
+  if (!scope || !(await can(actor, "provider.read", scope))) return "No model lists visible from here.";
+
+  const lists = await db
+    .select()
+    .from(schema.modelLists)
+    .where(
+      scope.ownerOrgId
+        ? eq(schema.modelLists.ownerOrgId, scope.ownerOrgId)
+        : eq(schema.modelLists.ownerUserId, scope.ownerUserId!),
+    );
+
+  if (lists.length === 0) return "No model lists set up yet.";
+
+  return lists.map((l) => `${l.name} — ${l.description || "(no description)"}`).join("\n");
+}
+
+async function createTaskTool(
+  actor: Actor,
+  args: z.infer<typeof CreateTask>,
+  context: ConductorContext,
+): Promise<string> {
+  const projectId = args.projectId ?? context.projectId;
+  if (!projectId) {
+    return "No project to dispatch to — pass a projectId (use list_projects to find one).";
+  }
+
+  /* Checked before anything else touches this project, including resolving a
+     model list — a project the actor cannot reach must behave the same as
+     one that does not exist, not leak its list names in an error message. */
+  const scope = await projectScope(projectId);
+  if (!scope || !(await can(actor, "task.run", scope))) {
+    return "That project doesn't exist, or isn't yours.";
+  }
+
+  let model = args.model;
+  if (args.modelList) {
+    const resolved = await resolveModelList(scope, args.modelList);
+    if ("error" in resolved) return resolved.error;
+    model = resolved.modelId;
+  }
+
+  try {
+    const created = await createTask(actor, { projectId, prompt: args.prompt, title: args.title, model });
+    return `Dispatched [${created.taskId}] "${created.title}" to ${created.nodeName} on ${created.model}.`;
+  } catch (err) {
+    /* Never let a thrown error escape a tool call — every result here is a
+       string the model reads and reacts to, same as every other tool. */
+    return err instanceof Error && err.message
+      ? err.message
+      : "Could not dispatch that task.";
+  }
 }

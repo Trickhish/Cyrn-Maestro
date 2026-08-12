@@ -618,6 +618,11 @@ export const tasks = sqliteTable(
     /* The model in play right now. The router may change it mid-task, so the
        authoritative per-call record is the usage events, not this column. */
     model: text("model"),
+    /* True only when the caller named this exact model, not when the router
+       picked it by default. A pin means "this model or fail" — failover
+       exists for the router's own choices and for model lists, not for a
+       direct call the caller made on purpose. */
+    modelPinned: integer("model_pinned", { mode: "boolean" }).notNull().default(false),
     costUsd: real("cost_usd").notNull().default(0),
     inputTokens: integer("input_tokens").notNull().default(0),
     outputTokens: integer("output_tokens").notNull().default(0),

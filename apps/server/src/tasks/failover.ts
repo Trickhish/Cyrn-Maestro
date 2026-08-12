@@ -26,6 +26,12 @@ export interface FailoverContext {
   messages: ChatMessage[];
   /* Tools beyond the node's own — load_skill, and later the MCP ones. */
   extraTools?: ToolDefinition[];
+  /* Set when the caller named this exact model. A pin means "this model or
+     fail" — it is a promise about cost and behavior that silently trying
+     something else would break. Failover is for the router's own picks and,
+     later, for model lists — the ordered-fallback-chain feature those are
+     built for. */
+  pinned?: boolean;
 }
 
 export async function* streamWithFailover(
@@ -35,7 +41,7 @@ export async function* streamWithFailover(
   signal: AbortSignal,
 ): AsyncGenerator<StreamEvent> {
   const startedWith = current().model;
-  const candidates = await candidatesFor(context.owner, startedWith);
+  const candidates = context.pinned ? [startedWith] : await candidatesFor(context.owner, startedWith);
 
   let lastError: unknown;
 

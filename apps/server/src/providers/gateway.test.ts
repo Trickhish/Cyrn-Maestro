@@ -1,7 +1,8 @@
 import { expect, test, describe, beforeAll, beforeEach } from "bun:test";
 import { db, schema } from "../db";
 import { encryptSecret } from "../lib/crypto";
-import { resolveProvider, toolDefinitions, estimateCost, NoProviderError } from "./gateway";
+import { eq } from "drizzle-orm";
+import { resolveProvider, resolveModelList, toolDefinitions, estimateCost, NoProviderError } from "./gateway";
 import { resetDatabase } from "../test/harness";
 import { TOOL_NAMES } from "@maestro/protocol";
 
@@ -160,6 +161,86 @@ describe("model selection", () => {
     await expect(resolveProvider({ ownerUserId: ALICE }, "nonexistent")).rejects.toThrow(
       /No connected provider offers/,
     );
+  });
+});
+
+/* This is the "tried one by one until one is available" behaviour lists were
+   built for — resolveModelList is the first thing that actually walks them. */
+describe("resolving a model list", () => {
+  async function makeList(name: string, entries: Array<{ modelId?: string; groupId?: string }>) {
+    const listId = crypto.randomUUID();
+    await db.insert(schema.modelLists).values({
+      id: listId, ownerUserId: ALICE, ownerOrgId: null, name, description: null, createdAt: Date.now(),
+    });
+    for (const [position, entry] of entries.entries()) {
+      await db.insert(schema.modelListEntries).values({
+        id: crypto.randomUUID(),
+        listId,
+        modelId: entry.modelId ?? null,
+        groupId: entry.groupId ?? null,
+        position,
+        createdAt: Date.now(),
+      });
+    }
+    return listId;
+  }
+
+  test("picks the first entry that is usable", async () => {
+    await giveProvider(ALICE, ["cheap", "expensive"]);
+    await makeList("normal programming", [{ modelId: "cheap" }, { modelId: "expensive" }]);
+
+    const result = await resolveModelList({ ownerUserId: ALICE }, "normal programming");
+    expect(result).toEqual({ modelId: "cheap" });
+  });
+
+  test("skips an entry whose model is failing its probe", async () => {
+    await giveProvider(ALICE, ["down", "backup"]);
+    await db.update(schema.models).set({ probeOk: false }).where(eq(schema.models.modelId, "down"));
+    await makeList("normal programming", [{ modelId: "down" }, { modelId: "backup" }]);
+
+    const result = await resolveModelList({ ownerUserId: ALICE }, "normal programming");
+    expect(result).toEqual({ modelId: "backup" });
+  });
+
+  test("resolves a group entry to its first usable member", async () => {
+    await giveProvider(ALICE, ["opus-vendor-a", "opus-vendor-b"]);
+    await db.update(schema.models).set({ probeOk: false }).where(eq(schema.models.modelId, "opus-vendor-a"));
+
+    const groupId = crypto.randomUUID();
+    await db.insert(schema.modelGroups).values({
+      id: groupId, ownerUserId: ALICE, ownerOrgId: null, name: "Claude Opus", createdAt: Date.now(),
+    });
+    await db.insert(schema.modelGroupMembers).values([
+      { id: crypto.randomUUID(), groupId, modelId: "opus-vendor-a", position: 0, createdAt: Date.now() },
+      { id: crypto.randomUUID(), groupId, modelId: "opus-vendor-b", position: 1, createdAt: Date.now() },
+    ]);
+    await makeList("difficult programming", [{ groupId }]);
+
+    const result = await resolveModelList({ ownerUserId: ALICE }, "difficult programming");
+    expect(result).toEqual({ modelId: "opus-vendor-b" });
+  });
+
+  test("names the owner's actual lists when the requested one does not exist", async () => {
+    await makeList("decision maker", []);
+    const result = await resolveModelList({ ownerUserId: ALICE }, "nonexistent");
+    expect(result).toEqual({ error: expect.stringContaining("decision maker") });
+  });
+
+  test("is a clear error, not a crash, when nothing in the list is available", async () => {
+    await giveProvider(ALICE, ["only-model"]);
+    await db.update(schema.models).set({ probeOk: false }).where(eq(schema.models.modelId, "only-model"));
+    await makeList("normal programming", [{ modelId: "only-model" }]);
+
+    const result = await resolveModelList({ ownerUserId: ALICE }, "normal programming");
+    expect(result).toEqual({ error: expect.stringContaining("normal programming") });
+  });
+
+  test("never resolves another user's list", async () => {
+    await giveProvider(BOB, ["bobs-model"]);
+    await makeList("normal programming", [{ modelId: "bobs-model" }]);
+
+    const result = await resolveModelList({ ownerUserId: BOB }, "normal programming");
+    expect(result).toEqual({ error: expect.stringContaining("No model list named") });
   });
 });
 

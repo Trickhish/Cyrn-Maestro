@@ -17,18 +17,30 @@ interface Message {
   error?: boolean;
 }
 
-export function Conductor({ onOpenTask }: { onOpenTask: (taskId: string) => void }) {
+interface ConductorProps {
+  onOpenTask: (taskId: string) => void;
+  /* Set when this is the panel embedded on one project's own tasks page,
+     rather than the global, cross-project screen. Scopes what it asks about
+     and, going into every request, which project a bare create_task/
+     list_model_lists call defaults to. */
+  projectId?: string;
+  /* Trades the full-page header and copy for something that fits inside a
+     panel alongside a project's composer and task list. */
+  embedded?: boolean;
+}
+
+export function Conductor({ onOpenTask, projectId, embedded }: ConductorProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const load = () => api.tasks().then((t) => setTasks(t.tasks)).catch(() => {});
+    const load = () => api.tasks(projectId).then((t) => setTasks(t.tasks)).catch(() => {});
     load();
     const timer = setInterval(load, 4000);
     return () => clearInterval(timer);
-  }, []);
+  }, [projectId]);
 
   useEffect(() => {
     const el = scroller.current;
@@ -44,7 +56,7 @@ export function Conductor({ onOpenTask }: { onOpenTask: (taskId: string) => void
 
     try {
       const history = messages.slice(-12).map((m) => ({ role: m.role, content: m.content }));
-      const answer = await api.askConductor(question, history);
+      const answer = await api.askConductor(question, history, projectId);
       setMessages((m) => [
         ...m,
         {
@@ -69,28 +81,43 @@ export function Conductor({ onOpenTask }: { onOpenTask: (taskId: string) => void
   }
 
   return (
-    <section className="flex-1 min-w-0 flex flex-col bg-canvas">
-      <header className="h-[46px] flex-none flex items-center gap-3 px-4 md:px-[26px] border-b rule overflow-x-auto scroll-quiet">
-        <h1 className="font-display text-[14px] font-semibold whitespace-nowrap">Conductor</h1>
-        <span className="hidden md:inline text-[12.5px] text-tertiary">the conversation about everything</span>
-        <span className="flex-1" />
-        <span className="font-mono text-[11px] text-tertiary tnum whitespace-nowrap">
-          {live.length} running · {needsYou.length} need you
-        </span>
-      </header>
+    <section className={embedded ? "flex flex-col bg-canvas border-t rule" : "flex-1 min-w-0 flex flex-col bg-canvas"}>
+      {!embedded && (
+        <header className="h-[46px] flex-none flex items-center gap-3 px-4 md:px-[26px] border-b rule overflow-x-auto scroll-quiet">
+          <h1 className="font-display text-[14px] font-semibold whitespace-nowrap">Conductor</h1>
+          <span className="hidden md:inline text-[12.5px] text-tertiary">the conversation about everything</span>
+          <span className="flex-1" />
+          <span className="font-mono text-[11px] text-tertiary tnum whitespace-nowrap">
+            {live.length} running · {needsYou.length} need you
+          </span>
+        </header>
+      )}
+      {embedded && (
+        <div className="flex-none flex items-center gap-2 px-4 pt-4">
+          <span className="speaker">conductor</span>
+          <span className="hidden md:inline text-[12px] text-tertiary">
+            dispatches and checks on work in this project
+          </span>
+        </div>
+      )}
 
       <div
         ref={scroller}
-        className="flex-1 min-h-0 overflow-auto scroll-quiet px-4 md:px-[26px] py-5 flex flex-col gap-[18px]"
+        className={
+          embedded
+            ? "max-h-[360px] min-h-[120px] overflow-auto scroll-quiet px-4 py-4 flex flex-col gap-[18px]"
+            : "flex-1 min-h-0 overflow-auto scroll-quiet px-4 md:px-[26px] py-5 flex flex-col gap-[18px]"
+        }
       >
         {messages.length === 0 && (
           <div className="flex flex-col gap-4 max-w-[760px]">
             <p className="prose-msg">
-              Ask about anything across your projects — what is running, what needs you, what a
-              task changed, where the tokens went.
+              {embedded
+                ? "Ask it to build something, check on a task, or pick a model list for the work."
+                : "Ask about anything across your projects — what is running, what needs you, what a task changed, where the tokens went."}
             </p>
 
-            {live.length > 0 && (
+            {!embedded && live.length > 0 && (
               <div className="flex flex-col gap-1.5">
                 <div className="speaker">running now</div>
                 {live.map((task) => (
@@ -100,12 +127,15 @@ export function Conductor({ onOpenTask }: { onOpenTask: (taskId: string) => void
             )}
 
             <div className="flex flex-wrap gap-1.5">
-              {[
-                "What's running?",
-                "Is anything waiting on me?",
-                "What did we ship today?",
-                "Where did the tokens go?",
-              ].map((suggestion) => (
+              {(embedded
+                ? ["What's running?", "Is anything waiting on me?"]
+                : [
+                    "What's running?",
+                    "Is anything waiting on me?",
+                    "What did we ship today?",
+                    "Where did the tokens go?",
+                  ]
+              ).map((suggestion) => (
                 <button
                   key={suggestion}
                   type="button"
@@ -167,11 +197,11 @@ export function Conductor({ onOpenTask }: { onOpenTask: (taskId: string) => void
         )}
       </div>
 
-      <footer className="flex-none border-t rule px-4 md:px-[26px] pt-3 pb-3.5">
+      <footer className={embedded ? "flex-none px-4 pt-2 pb-4" : "flex-none border-t rule px-4 md:px-[26px] pt-3 pb-3.5"}>
         <Composer
-          chip="read-only"
-          placeholder="Ask about everything"
-          hints={["⏎ send", "the Conductor can report, but not yet dispatch"]}
+          chip="dispatches work"
+          placeholder={embedded ? "Ask it to build, fix, or check on something" : "Ask about everything"}
+          hints={["⏎ send", "can dispatch tasks and pick a model list for them"]}
           onSend={(text) => void ask(text)}
         />
       </footer>

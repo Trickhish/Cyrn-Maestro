@@ -482,13 +482,17 @@ export const api = {
   approve: (id: string, callId: string, approved: boolean) =>
     post<{ ok: true }>(`/tasks/${id}/approve`, { callId, approved }),
 
-  askConductor: (question: string, history: Array<{ role: "user" | "assistant"; content: string }>) =>
+  askConductor: (
+    question: string,
+    history: Array<{ role: "user" | "assistant"; content: string }>,
+    projectId?: string,
+  ) =>
     post<{
       text: string;
       usedTools: Array<{ name: string; args: unknown }>;
       usage: { inputTokens: number; outputTokens: number };
       model: string;
-    }>("/conductor/ask", { question, history }),
+    }>("/conductor/ask", { question, history, ...(projectId ? { projectId } : {}) }),
 };
 
 /* ------------------------------------------------------------------ events */

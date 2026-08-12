@@ -227,6 +227,44 @@ describe("a failure that will not be fixed by retrying", () => {
   });
 });
 
+describe("a pinned model", () => {
+  /* Model lists are the ordered-fallback-chain feature. A direct pin is a
+     promise about which model and what it costs — silently substituting
+     another one breaks that promise even if the substitute would work. */
+  test("is not failed over even when another candidate would succeed", async () => {
+    await seed(["model-a", "model-b"]);
+
+    let current = provider("model-a", fails(503, true));
+    await expect(
+      drain(
+        streamWithFailover(
+          () => current,
+          (next) => (current = { ...next, adapter: ok("recovered") }),
+          { ...context, pinned: true },
+          new AbortController().signal,
+        ),
+      ),
+    ).rejects.toThrow(/boom 503/);
+  });
+
+  test("does not announce a switch that never happened", async () => {
+    await seed(["model-a", "model-b"]);
+    let current = provider("model-a", fails(503, true));
+
+    await drain(
+      streamWithFailover(
+        () => current,
+        (next) => (current = { ...next, adapter: ok("recovered") }),
+        { ...context, pinned: true },
+        new AbortController().signal,
+      ),
+    ).catch(() => {});
+
+    const events = await replay(TASK);
+    expect(events.some((e) => e.kind === "assistant_message")).toBe(false);
+  });
+});
+
 describe("cancellation", () => {
   test("an aborted run stops rather than failing over", async () => {
     await seed(["model-a", "model-b"]);

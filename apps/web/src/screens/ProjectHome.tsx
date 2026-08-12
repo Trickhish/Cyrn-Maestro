@@ -11,6 +11,7 @@ import {
 import { Composer } from "../components/Composer";
 import { RoutingChips } from "../components/RoutingChips";
 import { ProjectSettings } from "./ProjectSettings";
+import { Conductor } from "./Conductor";
 
 /* The screen you land on: a composer, then what is running, then what ran.
  *
@@ -144,6 +145,8 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
             </div>
           )}
         </div>
+
+        <Conductor projectId={project.id} embedded onOpenTask={onOpenTask} />
 
         {live.length > 0 && (
           <Section title="Running">

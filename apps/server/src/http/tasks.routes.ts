@@ -2,9 +2,9 @@ import { Hono } from "hono";
 import { eq, desc, and } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db";
-import { append, replayForDisplay, subscribe, lastSeq } from "../tasks/events";
-import { startTask, steer, cancel, decideApproval, isRunning } from "../tasks/runner";
-import { onlineNodes, loadOf, noteAssigned } from "../nodes/registry";
+import { replayForDisplay, subscribe, lastSeq } from "../tasks/events";
+import { steer, cancel, decideApproval, isRunning } from "../tasks/runner";
+import { createTask } from "../tasks/create";
 import { planRoute } from "../router";
 import { assertCan, projectScope, taskScope } from "../lib/permissions";
 import { BadRequest, NotFound, requireActor, type Env } from "./context";
@@ -63,124 +63,9 @@ taskRoutes.post("/", async (c) => {
     throw new BadRequest("Check the form.", z.flattenError(parsed.error).fieldErrors);
   }
 
-  const scope = await projectScope(parsed.data.projectId);
-  if (!scope) throw new NotFound();
-  await assertCan(actor, "task.run", scope);
+  const created = await createTask(actor, parsed.data);
 
-  /* The router picks a node and a model and says why. An explicit choice from
-     the caller wins; otherwise it scores what is actually available now.
-     Nodes belong to whoever owns the PROJECT, not to whoever pressed the
-     button — a member's personal laptop is not org capacity. */
-  const plan = await planRoute({
-    owner: scope,
-    prompt: parsed.data.prompt,
-    projectId: parsed.data.projectId,
-    pinnedNodeId: parsed.data.nodeId ?? null,
-    pinnedModel: parsed.data.model ?? null,
-  });
-
-  if (plan.blocked || !plan.node || !plan.model) {
-    /* "Every node is busy" reads differently from "there are no nodes", and
-       the router already knows which it is. */
-    const online = onlineNodes(scope);
-    const allBusy = online.length > 0 && online.every((n) => loadOf(n) >= n.maxConcurrentTasks);
-    throw new BadRequest(
-      allBusy
-        ? "Every node is at capacity. Wait for a task to finish, or add another machine."
-        : (plan.blocked ?? "Could not route this task."),
-    );
-  }
-
-  const routedNode = plan.node;
-  const routedModel = plan.model;
-  const node = onlineNodes(scope).find((n) => n.nodeId === routedNode.picked.id)!;
-
-  /* A workspace row per (project, node) so the node knows where to work. */
-  const [existing] = await db
-    .select()
-    .from(schema.workspaces)
-    .where(
-      and(
-        eq(schema.workspaces.projectId, parsed.data.projectId),
-        eq(schema.workspaces.nodeId, node.nodeId),
-      ),
-    )
-    .limit(1);
-
-  const workspace =
-    existing ??
-    (
-      await db
-        .insert(schema.workspaces)
-        .values({
-          id: crypto.randomUUID(),
-          projectId: parsed.data.projectId,
-          nodeId: node.nodeId,
-          /* Empty means "the node decides", which it does by joining its
-             workspace root with the project id. Storing the resolved path is
-             the node's job to report back, not the server's to guess — the
-             server does not know the node's filesystem layout. */
-          path: "",
-          branch: null,
-          provisionedAt: Date.now(),
-          createdAt: Date.now(),
-        })
-        .returning()
-    )[0];
-
-  const taskId = crypto.randomUUID();
-  const title =
-    parsed.data.title ??
-    parsed.data.prompt.split("\n")[0].slice(0, 80) +
-      (parsed.data.prompt.length > 80 ? "…" : "");
-
-  await db.insert(schema.tasks).values({
-    id: taskId,
-    projectId: parsed.data.projectId,
-    workspaceId: workspace.id,
-    nodeId: node.nodeId,
-    actorUserId: actor.id,
-    title,
-    prompt: parsed.data.prompt,
-    status: "queued",
-    model: routedModel.picked.id,
-    costUsd: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-    createdAt: Date.now(),
-  });
-
-  append(taskId, { kind: "status", status: "queued" });
-  /* Recorded before anything runs, so the thread can always answer "why this
-     machine and this model" without anyone reconstructing it afterwards. */
-  append(taskId, {
-    kind: "routing_decision",
-    nodeName: plan.node.picked.name,
-    model: routedModel.picked.id,
-    because: `${plan.node.because}; ${plan.model.because}`,
-  });
-  append(taskId, { kind: "user_message", text: parsed.data.prompt, queued: false });
-
-  /* Tell the node to make the workspace, then run. Not awaited: the response
-     returns immediately and the UI follows the event stream. */
-  const { sendToNode } = await import("../nodes/registry");
-  const { newId } = await import("@maestro/protocol");
-  sendToNode(node.nodeId, {
-    type: "task.assign",
-    id: newId(),
-    taskId,
-    projectId: parsed.data.projectId,
-    workspacePath: workspace.path || "",
-    limits: { wallClockMs: 30 * 60 * 1000, maxToolCalls: 200 },
-  });
-
-  /* Counted against the node the moment it is sent, so a second dispatch a
-     second later sees it rather than waiting for the next heartbeat. */
-  noteAssigned(node.nodeId, taskId);
-
-  void startTask(taskId);
-
-  return c.json({ task: { id: taskId, title, status: "queued" } }, 201);
+  return c.json({ task: { id: created.taskId, title: created.title, status: "queued" } }, 201);
 });
 
 /* What the router would do, without doing it.

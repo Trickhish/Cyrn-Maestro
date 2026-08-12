@@ -16,6 +16,10 @@ const Ask = z.object({
     .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() }))
     .max(40)
     .optional(),
+  /* Set when the Conductor is embedded on a specific project's own page —
+     its tools then default to that project rather than needing the model to
+     be told or to ask which one. */
+  projectId: z.string().optional(),
 });
 
 conductorRoutes.post("/ask", async (c) => {
@@ -30,6 +34,7 @@ conductorRoutes.post("/ask", async (c) => {
       parsed.data.history ?? [],
       parsed.data.question,
       c.req.raw.signal,
+      { projectId: parsed.data.projectId },
     );
 
     return c.json({

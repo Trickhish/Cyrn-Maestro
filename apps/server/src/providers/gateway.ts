@@ -35,13 +35,12 @@ export interface ResolvedProvider {
   reasoningEffort?: ReasoningEffort;
 }
 
-/* Candidates for a task, best first: the one the router chose, then the models
-   it would fall back to. Used when a provider rate-limits mid-run — the task
-   moves to the next candidate rather than dying. */
-export async function candidatesFor(
-  owner: { ownerUserId?: string | null; ownerOrgId?: string | null },
-  firstChoice: string,
-): Promise<string[]> {
+type OwnerScope = { ownerUserId?: string | null; ownerOrgId?: string | null };
+
+/* Every enabled model across the owner's own enabled provider connections —
+   the raw set that both fallback candidates and model-list resolution pick
+   from. Shared so the two never drift into judging "usable" differently. */
+async function usableModelsFor(owner: OwnerScope) {
   const connections = await db
     .select()
     .from(schema.providerConnections)
@@ -54,7 +53,7 @@ export async function candidatesFor(
       ),
     );
 
-  const models = (
+  return (
     await Promise.all(
       connections.map((connection) =>
         db
@@ -64,6 +63,13 @@ export async function candidatesFor(
       ),
     )
   ).flat();
+}
+
+/* Candidates for a task, best first: the one the router chose, then the models
+   it would fall back to. Used when a provider rate-limits mid-run — the task
+   moves to the next candidate rather than dying. */
+export async function candidatesFor(owner: OwnerScope, firstChoice: string): Promise<string[]> {
+  const models = await usableModelsFor(owner);
 
   const [chosen] = models.filter((m) => m.modelId === firstChoice);
   const wantedTier = chosen?.tier ?? "standard";
@@ -78,6 +84,76 @@ export async function candidatesFor(
     .map((m) => m.modelId);
 
   return [firstChoice, ...fallbacks];
+}
+
+/* Resolves a named model list to one concrete, currently-usable model id —
+ * walking entries in preference order and, for a group entry, that group's
+ * own members in their order, until one is actually connected, enabled and
+ * not known to be failing its probe. This is the "tried one by one until one
+ * is available" behaviour lists were built for; nothing has called it until
+ * the Conductor needed to hand a worker task a model by category rather than
+ * a raw id. */
+export async function resolveModelList(
+  owner: OwnerScope,
+  listName: string,
+): Promise<{ modelId: string } | { error: string }> {
+  const [list] = await db
+    .select()
+    .from(schema.modelLists)
+    .where(
+      and(
+        owner.ownerOrgId
+          ? eq(schema.modelLists.ownerOrgId, owner.ownerOrgId)
+          : eq(schema.modelLists.ownerUserId, owner.ownerUserId!),
+        eq(schema.modelLists.name, listName),
+      ),
+    )
+    .limit(1);
+
+  if (!list) {
+    const names = await db
+      .select({ name: schema.modelLists.name })
+      .from(schema.modelLists)
+      .where(
+        owner.ownerOrgId
+          ? eq(schema.modelLists.ownerOrgId, owner.ownerOrgId)
+          : eq(schema.modelLists.ownerUserId, owner.ownerUserId!),
+      );
+    return {
+      error:
+        names.length > 0
+          ? `No model list named "${listName}". Available: ${names.map((n) => n.name).join(", ")}.`
+          : `No model list named "${listName}", and none exist yet.`,
+    };
+  }
+
+  const entries = await db
+    .select()
+    .from(schema.modelListEntries)
+    .where(eq(schema.modelListEntries.listId, list.id))
+    .orderBy(schema.modelListEntries.position);
+
+  const usable = new Set(
+    (await usableModelsFor(owner)).filter((m) => m.probeOk !== false).map((m) => m.modelId),
+  );
+
+  for (const entry of entries) {
+    if (entry.modelId) {
+      if (usable.has(entry.modelId)) return { modelId: entry.modelId };
+      continue;
+    }
+    if (entry.groupId) {
+      const members = await db
+        .select()
+        .from(schema.modelGroupMembers)
+        .where(eq(schema.modelGroupMembers.groupId, entry.groupId))
+        .orderBy(schema.modelGroupMembers.position);
+      const member = members.find((m) => usable.has(m.modelId));
+      if (member) return { modelId: member.modelId };
+    }
+  }
+
+  return { error: `No model in "${listName}" is currently available.` };
 }
 
 /* Owner scope, not actor. The member running the task is irrelevant to which
