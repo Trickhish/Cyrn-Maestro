@@ -12,10 +12,16 @@ import { Composer } from "../components/Composer";
 interface Message {
   role: "user" | "assistant";
   content: string;
-  usedTools?: string[];
+  usedTools?: Array<{ name: string; args: unknown }>;
   model?: string;
   error?: boolean;
+  /* Tasks this turn dispatched. Rendered as live cards under the message and
+     followed up on when they finish, so work the Conductor started is visible
+     in the conversation that started it rather than only in the task list. */
+  dispatched?: string[];
 }
+
+const TERMINAL = ["completed", "failed", "cancelled"];
 
 interface ConductorProps {
   onOpenTask: (taskId: string) => void;
@@ -31,6 +37,7 @@ interface ConductorProps {
      dispatch the Conductor makes without naming a model of its own still
      honours what the user picked by hand. */
   pinnedModel?: string;
+  pinnedModelList?: string;
   pinnedNodeId?: string;
   /* Rendered between the composer and the thread — the routing chips live
      here so the one input on the page keeps its routing controls. */
@@ -43,6 +50,7 @@ export function Conductor({
   projectId,
   embedded,
   pinnedModel,
+  pinnedModelList,
   pinnedNodeId,
   under,
   onDispatched,
@@ -64,11 +72,14 @@ export function Conductor({
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages.length, busy]);
 
-  const live = tasks.filter((t) => !["completed", "failed", "cancelled"].includes(t.status));
+  const live = tasks.filter((t) => !TERMINAL.includes(t.status));
   const needsYou = live.filter((t) => t.status === "awaiting_approval");
 
-  async function ask(question: string) {
-    setMessages((m) => [...m, { role: "user", content: question }]);
+  /* `silent` is for the follow-up the panel fires itself once a dispatched
+     task finishes: the Conductor's answer belongs in the thread, but the
+     question does not — the user never typed it. */
+  async function ask(question: string, silent = false) {
+    if (!silent) setMessages((m) => [...m, { role: "user", content: question }]);
     setBusy(true);
 
     try {
@@ -76,21 +87,26 @@ export function Conductor({
       const answer = await api.askConductor(question, history, {
         projectId,
         pinnedModel: pinnedModel || undefined,
+        pinnedModelList: pinnedModelList || undefined,
         pinnedNodeId: pinnedNodeId || undefined,
       });
+
+      const dispatched = answer.dispatched ?? [];
+
       setMessages((m) => [
         ...m,
         {
           role: "assistant",
           content: answer.text,
-          usedTools: answer.usedTools.map((t) => t.name),
+          usedTools: answer.usedTools,
           model: answer.model,
+          ...(dispatched.length ? { dispatched } : {}),
         },
       ]);
 
       /* A turn that dispatched something changes the task list behind this
          panel, so the page refreshes rather than waiting out its poll. */
-      if (answer.usedTools.some((t) => t.name === "create_task")) onDispatched?.();
+      if (dispatched.length) onDispatched?.();
     } catch (err) {
       setMessages((m) => [
         ...m,
@@ -104,6 +120,37 @@ export function Conductor({
       setBusy(false);
     }
   }
+
+  /* Closing the loop on dispatched work.
+   *
+   * The Conductor cannot watch a task — a turn ends when it answers. So the
+   * panel watches instead, and asks it one more question the moment a task it
+   * started reaches a terminal state. Reported ids are remembered in a ref
+   * rather than state: the task list is re-polled every four seconds, and
+   * anything less durable would ask again on every tick. */
+  const reported = useRef(new Set<string>());
+  const askRef = useRef(ask);
+  askRef.current = ask;
+
+  useEffect(() => {
+    if (busy) return;
+
+    const mine = new Set(messages.flatMap((m) => m.dispatched ?? []));
+    const done = tasks.find(
+      (t) => mine.has(t.id) && TERMINAL.includes(t.status) && !reported.current.has(t.id),
+    );
+    if (!done) return;
+
+    /* Marked before the call, not after: an in-flight follow-up must not be
+       started twice by the next poll. */
+    reported.current.add(done.id);
+    void askRef.current(
+      `The task [${done.id}] you dispatched has finished with status "${done.status}". ` +
+        `Read what it actually did with get_task and tell me the outcome in a sentence or two. ` +
+        `If it failed or the work needs another pass, say so and what you would dispatch next.`,
+      true,
+    );
+  }, [tasks, messages, busy]);
 
   const composer = (
     <Composer
@@ -202,17 +249,41 @@ export function Conductor({
               }
             >
               {message.role === "assistant" && !message.error ? (
-                <Linked text={message.content} tasks={tasks} onOpenTask={onOpenTask} />
+                <Linked
+                  text={message.content}
+                  tasks={tasks}
+                  onOpenTask={onOpenTask}
+                  /* A card for the same task is rendered right below, so the
+                     inline link would be the same thing said twice. */
+                  plainIds={message.dispatched}
+                />
               ) : (
                 message.content
               )}
             </div>
 
+            {/* The dispatched work itself, live and clickable, in the
+                conversation that started it. */}
+            {message.dispatched?.map((id) => {
+              const task = tasks.find((t) => t.id === id);
+              return task ? (
+                <TaskCard key={id} task={task} onOpen={() => onOpenTask(id)} />
+              ) : (
+                <div
+                  key={id}
+                  className="border rule rounded-[10px] px-[13px] py-[11px] flex items-center gap-[9px] bg-raised"
+                >
+                  <span className="dot dot-lg dot-idle" />
+                  <span className="text-[13px] text-tertiary">Dispatching…</span>
+                </div>
+              );
+            })}
+
             {/* Shows its work: which lookups the answer came from, so it is
                 not asking to be taken on trust. */}
             {message.usedTools?.length ? (
               <div className="flex flex-wrap gap-1.5">
-                {[...new Set(message.usedTools)].map((tool) => (
+                {[...new Set(message.usedTools.map((t) => t.name))].map((tool) => (
                   <span
                     key={tool}
                     className="font-mono text-[10px] text-faint border rule rounded px-1.5 py-0.5"
@@ -246,10 +317,15 @@ function Linked({
   text,
   tasks,
   onOpenTask,
+  plainIds,
 }: {
   text: string;
   tasks: TaskSummary[];
   onOpenTask: (taskId: string) => void;
+  /* Ids that already have a card of their own below this message. Rendering
+     them as links too would say the same thing twice, so they are dropped
+     from the sentence entirely. */
+  plainIds?: string[];
 }) {
   const parts = text.split(/\[([0-9a-f-]{8,})\]/gi);
 
@@ -258,6 +334,7 @@ function Linked({
       {parts.map((part, i) => {
         /* Odd indices are the captured ids. */
         if (i % 2 === 0) return <span key={i}>{part}</span>;
+        if (plainIds?.includes(part)) return null;
 
         const task = tasks.find((t) => t.id === part);
         return (

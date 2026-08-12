@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db, schema } from "../db";
-import { resolveProvider } from "../providers/gateway";
-import { can, projectScope } from "../lib/permissions";
+import { resolveProvider, resolveModelList } from "../providers/gateway";
+import { can, projectScope, type Scope } from "../lib/permissions";
 import { conductorToolDefinitions, runConductorTool, type ConductorContext } from "./tools";
 import type { Actor } from "../lib/auth";
 import type { ChatMessage } from "../providers/types";
@@ -67,12 +67,52 @@ export async function whereWeAre(actor: Actor, context: ConductorContext): Promi
 
   const pinned = [
     context.pinnedModel ? `the model ${context.pinnedModel}` : null,
+    context.pinnedModelList ? `the "${context.pinnedModelList}" profile` : null,
     context.pinnedNodeId ? "a specific machine" : null,
   ].filter(Boolean);
 
   return `\n\nThis conversation is about the project "${project.name}" (id ${context.projectId}). Every tool already defaults to it, so use them directly rather than asking the user which project they mean, and only pass a projectId when you genuinely mean a different one.${
     pinned.length ? ` The user has pinned ${pinned.join(" and ")} for work dispatched from here; leave create_task's model and modelList unset to honour that.` : ""
   }`;
+}
+
+/* Coordinating work is its own job, and the user already has a list saying
+   which models are good at it. Without this the Conductor ran on whatever the
+   gateway happened to default to, which is both unpredictable and the one
+   model choice on the page nobody could influence. */
+export const CONDUCTOR_LIST_NAME = "manager/conductor";
+
+/* Whose connections the Conductor itself runs on, and which model.
+ *
+ * The scope is the project's owner when embedded, not the actor — an org
+ * project's Conductor should bill the org, the same rule dispatched tasks
+ * already follow. Falling back rather than failing is deliberate: a missing
+ * or fully-unavailable profile must not take the Conductor offline, since
+ * without it the user cannot even ask what went wrong. */
+export async function conductorProvider(actor: Actor, context: ConductorContext) {
+  const personal: Scope = { ownerUserId: actor.id, ownerOrgId: null };
+  const project = context.projectId ? await projectScope(context.projectId) : null;
+  const scope =
+    project && (await can(actor, "task.run", project)) ? project : personal;
+
+  if (context.conductorModel) {
+    try {
+      return await resolveProvider(scope, context.conductorModel);
+    } catch {
+      /* An override naming something unreachable should not be fatal either. */
+    }
+  }
+
+  const resolved = await resolveModelList(scope, CONDUCTOR_LIST_NAME);
+  if ("modelId" in resolved) {
+    try {
+      return await resolveProvider(scope, resolved.modelId);
+    } catch {
+      /* Listed but unreachable right now — fall through to the default. */
+    }
+  }
+
+  return resolveProvider(scope);
 }
 
 export async function askConductor(
@@ -82,9 +122,7 @@ export async function askConductor(
   signal?: AbortSignal,
   context: ConductorContext = {},
 ): Promise<ConductorTurn> {
-  /* Same ownership rule as a task: the Conductor runs on the user's own
-     provider connection. */
-  const provider = await resolveProvider({ ownerUserId: actor.id });
+  const provider = await conductorProvider(actor, context);
 
   const messages: ChatMessage[] = [
     { role: "system", content: SYSTEM_PROMPT + (await whereWeAre(actor, context)) },

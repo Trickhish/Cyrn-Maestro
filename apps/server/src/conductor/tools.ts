@@ -39,6 +39,13 @@ export interface ConductorContext {
      nothing once the Conductor is the thing dispatching. */
   pinnedModel?: string;
   pinnedNodeId?: string;
+  /* The same control, set to a whole profile rather than one model: work
+     dispatched from here resolves through that list instead. */
+  pinnedModelList?: string;
+  /* Forces the model the Conductor itself reasons on, ahead of its own
+     "manager/conductor" profile. Nothing in the interface sets this yet — it
+     exists so the choice is reachable without another round of plumbing. */
+  conductorModel?: string;
 }
 
 const ACTIVE = ["queued", "assigned", "running", "awaiting_approval"] as const;
@@ -540,9 +547,17 @@ async function createTaskTool(
     if ("error" in resolved) return resolved.error;
     model = resolved.modelId;
   }
+
   /* Only when the Conductor did not choose for itself — an explicit model or
      list it picked for this particular task is a deliberate decision, and a
-     standing pin should not silently override it. */
+     standing pin should not silently override it. A pinned profile resolves
+     the same way its own modelList argument would, and an unresolvable one
+     is an error rather than a silent fall-through to something cheaper. */
+  if (!model && context.pinnedModelList) {
+    const resolved = await resolveModelList(scope, context.pinnedModelList);
+    if ("error" in resolved) return resolved.error;
+    model = resolved.modelId;
+  }
   model = model ?? context.pinnedModel;
 
   try {

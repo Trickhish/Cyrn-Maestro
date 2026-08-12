@@ -28,6 +28,7 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [model, setModel] = useState<string>("");
+  const [modelList, setModelList] = useState<string>("");
   const [nodeId, setNodeId] = useState<string>("");
   const [tab, setTab] = useState<"tasks" | "settings">("tasks");
   const [error, setError] = useState<string>();
@@ -98,6 +99,7 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
           embedded
           onOpenTask={onOpenTask}
           pinnedModel={model || undefined}
+          pinnedModelList={modelList || undefined}
           pinnedNodeId={nodeId || undefined}
           onDispatched={() => void refresh()}
           under={
@@ -112,8 +114,10 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
                 prompt=""
                 pinnedNodeId={nodeId || undefined}
                 pinnedModel={model || undefined}
+                pinnedModelList={modelList || undefined}
                 onPinNode={(id) => setNodeId(id ?? "")}
                 onPinModel={(m) => setModel(m ?? "")}
+                onPinModelList={(name) => setModelList(name ?? "")}
               />
 
               {online.length === 0 && (

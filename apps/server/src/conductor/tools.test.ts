@@ -350,6 +350,70 @@ describe("create_task", () => {
     await settle(out.match(/\[([^\]]+)\]/)![1]);
   });
 
+  /* The routing chip can now be set to a whole profile rather than one model.
+     It is a standing preference, so it applies when the Conductor did not
+     choose for itself — and must not quietly override it when it did. */
+  test("uses a pinned profile when the Conductor names nothing itself", async () => {
+    await enrollNode("alice");
+    await giveProvider("alice", ["pinned-list-model", "other-model"]);
+    await db.insert(schema.modelLists).values({
+      id: "lp", ownerUserId: "alice", ownerOrgId: null, name: "difficult programming", description: null, createdAt: Date.now(),
+    });
+    await db.insert(schema.modelListEntries).values({
+      id: "ep", listId: "lp", modelId: "pinned-list-model", groupId: null, position: 0, createdAt: Date.now(),
+    });
+
+    const out = await runConductorTool(
+      alice,
+      "create_task",
+      { prompt: "do the thing" },
+      { projectId: "p-alice", pinnedModelList: "difficult programming" },
+    );
+    expect(out).toContain("pinned-list-model");
+    await settle(out.match(/\[([^\]]+)\]/)![1]);
+  });
+
+  test("the Conductor's own choice still beats a pinned profile", async () => {
+    await enrollNode("alice");
+    await giveProvider("alice", ["pinned-list-model", "chosen-model"]);
+    await db.insert(schema.modelLists).values({
+      id: "lp2", ownerUserId: "alice", ownerOrgId: null, name: "difficult programming", description: null, createdAt: Date.now(),
+    });
+    await db.insert(schema.modelListEntries).values({
+      id: "ep2", listId: "lp2", modelId: "pinned-list-model", groupId: null, position: 0, createdAt: Date.now(),
+    });
+
+    const out = await runConductorTool(
+      alice,
+      "create_task",
+      { prompt: "do the thing", model: "chosen-model" },
+      { projectId: "p-alice", pinnedModelList: "difficult programming" },
+    );
+    expect(out).toContain("chosen-model");
+    await settle(out.match(/\[([^\]]+)\]/)![1]);
+  });
+
+  test("a pinned profile that resolves to nothing is an error, not a silent downgrade", async () => {
+    await enrollNode("alice");
+    await giveProvider("alice", ["only-model"]);
+    await db.insert(schema.modelLists).values({
+      id: "lp3", ownerUserId: "alice", ownerOrgId: null, name: "difficult programming", description: null, createdAt: Date.now(),
+    });
+    await db.insert(schema.modelListEntries).values({
+      id: "ep3", listId: "lp3", modelId: "not-connected", groupId: null, position: 0, createdAt: Date.now(),
+    });
+
+    const before = await db.select().from(schema.tasks);
+    const out = await runConductorTool(
+      alice,
+      "create_task",
+      { prompt: "do the thing" },
+      { projectId: "p-alice", pinnedModelList: "difficult programming" },
+    );
+    expect(out).toContain("is currently available");
+    expect(await db.select().from(schema.tasks)).toHaveLength(before.length);
+  });
+
   test("a modelList with nothing available is a clear error, no task created", async () => {
     await enrollNode("alice");
     await giveProvider("alice", ["only-model"]);

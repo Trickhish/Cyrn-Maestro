@@ -485,11 +485,19 @@ export const api = {
   askConductor: (
     question: string,
     history: Array<{ role: "user" | "assistant"; content: string }>,
-    scope?: { projectId?: string; pinnedModel?: string; pinnedNodeId?: string },
+    scope?: {
+      projectId?: string;
+      pinnedModel?: string;
+      pinnedModelList?: string;
+      pinnedNodeId?: string;
+      conductorModel?: string;
+    },
   ) =>
     post<{
       text: string;
       usedTools: Array<{ name: string; args: unknown }>;
+      /* Task ids this turn dispatched, taken from the tool's own result. */
+      dispatched: string[];
       usage: { inputTokens: number; outputTokens: number };
       model: string;
     }>("/conductor/ask", { question, history, ...scope }),

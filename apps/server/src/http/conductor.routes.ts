@@ -24,6 +24,10 @@ const Ask = z.object({
      Conductor makes without choosing a model of its own still honours it. */
   pinnedModel: z.string().optional(),
   pinnedNodeId: z.string().optional(),
+  pinnedModelList: z.string().optional(),
+  /* Overrides the model the Conductor itself reasons on, ahead of its own
+     profile. */
+  conductorModel: z.string().optional(),
 });
 
 conductorRoutes.post("/ask", async (c) => {
@@ -42,6 +46,8 @@ conductorRoutes.post("/ask", async (c) => {
         projectId: parsed.data.projectId,
         pinnedModel: parsed.data.pinnedModel,
         pinnedNodeId: parsed.data.pinnedNodeId,
+        pinnedModelList: parsed.data.pinnedModelList,
+        conductorModel: parsed.data.conductorModel,
       },
     );
 
@@ -50,6 +56,13 @@ conductorRoutes.post("/ask", async (c) => {
       /* The tools it used, so the interface can show its work rather than
          asking the user to trust an unsourced answer. */
       usedTools: turn.toolCalls.map((call) => ({ name: call.name, args: call.args })),
+      /* What this turn actually dispatched, read from the tool's own result
+         rather than from the model's prose — it does not reliably quote the
+         id back, and a card the interface only draws when the sentence
+         happens to mention one is a card that mostly does not appear. */
+      dispatched: turn.toolCalls.flatMap((call) =>
+        call.name === "create_task" ? [...call.result.matchAll(/\[([0-9a-f-]{8,})\]/gi)].map((m) => m[1]) : [],
+      ),
       usage: turn.usage,
       model: turn.model,
     });

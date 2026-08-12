@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
+import { api, type ModelList } from "../lib/api";
 
 /* What the router would do, shown before it does it.
  *
@@ -20,8 +20,12 @@ interface RoutingChipsProps {
   prompt: string;
   pinnedNodeId?: string;
   pinnedModel?: string;
+  /* A whole profile rather than one model. Mutually exclusive with
+     pinnedModel — picking either clears the other. */
+  pinnedModelList?: string;
   onPinNode: (nodeId: string | undefined) => void;
   onPinModel: (model: string | undefined) => void;
+  onPinModelList: (name: string | undefined) => void;
 }
 
 export function RoutingChips({
@@ -29,11 +33,29 @@ export function RoutingChips({
   prompt,
   pinnedNodeId,
   pinnedModel,
+  pinnedModelList,
   onPinNode,
   onPinModel,
+  onPinModelList,
 }: RoutingChipsProps) {
   const [plan, setPlan] = useState<Plan>();
+  const [lists, setLists] = useState<ModelList[]>([]);
   const [open, setOpen] = useState<"node" | "model" | null>(null);
+
+  /* The profiles the owner has set up. Fetched once rather than per keystroke:
+     unlike the plan, this does not depend on what was typed. */
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .modelLists()
+      .then((r) => {
+        if (!cancelled) setLists(r.lists);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   /* Re-planned as the prompt changes, because the tier depends on what was
      typed — but debounced, since this hits the database on every keystroke
@@ -77,22 +99,39 @@ export function RoutingChips({
           }}
         />
 
+        {/* A profile is a first-class choice here, not a shortcut for a model:
+            picked, it is resolved at dispatch to whichever of its models is
+            actually up, which is the whole point of a list. */}
         <Chip
           label="model"
-          value={plan.model?.picked.id ?? "none usable"}
-          because={plan.model?.because}
-          pinned={Boolean(pinnedModel)}
+          value={pinnedModelList ?? plan.model?.picked.id ?? "none usable"}
+          because={pinnedModelList ? "a profile you pinned" : plan.model?.because}
+          pinned={Boolean(pinnedModel || pinnedModelList)}
           open={open === "model"}
           onToggle={() => setOpen(open === "model" ? null : "model")}
           options={[
-            ...(pinnedModel ? [{ id: "", label: "Let Maestro choose" }] : []),
+            ...(pinnedModel || pinnedModelList
+              ? [{ id: "", label: "Let Maestro choose" }]
+              : []),
+            ...lists.map((l) => ({
+              id: `list:${l.name}`,
+              label: l.name,
+              detail: l.description ?? undefined,
+              section: "profiles",
+            })),
             ...(plan.model?.alternatives ?? []).map((m) => ({
-              id: m.id,
-              label: `${m.id} · ${m.tier}`,
+              id: `model:${m.id}`,
+              label: m.id,
+              detail: m.tier,
+              section: "models",
             })),
           ]}
           onPick={(id) => {
-            onPinModel(id || undefined);
+            /* One or the other, never both — they are alternative answers to
+               the same question, and holding both would make which one wins a
+               guess. */
+            onPinModelList(id.startsWith("list:") ? id.slice(5) : undefined);
+            onPinModel(id.startsWith("model:") ? id.slice(6) : undefined);
             setOpen(null);
           }}
         />
@@ -129,7 +168,7 @@ function Chip({
   because?: string;
   pinned: boolean;
   open: boolean;
-  options: Array<{ id: string; label: string }>;
+  options: Array<{ id: string; label: string; detail?: string; section?: string }>;
   onToggle: () => void;
   onPick: (id: string) => void;
 }) {
@@ -159,16 +198,31 @@ function Chip({
           {options.length === 0 ? (
             <div className="px-2 py-1.5 text-[12px] text-faint">Nothing else available.</div>
           ) : (
-            options.map((option) => (
-              <button
-                key={option.id || "auto"}
-                type="button"
-                className="w-full rounded px-2 py-1.5 text-left text-[12.5px] text-secondary hover:bg-raised hover:text-primary"
-                onClick={() => onPick(option.id)}
-              >
-                {option.label}
-              </button>
-            ))
+            <div className="max-h-[320px] overflow-auto scroll-quiet">
+              {options.map((option, i) => (
+                <div key={option.id || "auto"}>
+                  {/* A header only where the section actually changes, so a
+                      list with one kind of option in it stays unadorned. */}
+                  {option.section && option.section !== options[i - 1]?.section && (
+                    <div className="px-2 pt-2 pb-1 font-mono text-[9.5px] tracking-[0.12em] uppercase text-faint">
+                      {option.section}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="w-full rounded px-2 py-1.5 text-left hover:bg-raised group"
+                    onClick={() => onPick(option.id)}
+                  >
+                    <span className="block text-[12.5px] text-secondary group-hover:text-primary truncate">
+                      {option.label}
+                    </span>
+                    {option.detail && (
+                      <span className="block text-[11px] text-faint truncate">{option.detail}</span>
+                    )}
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}
