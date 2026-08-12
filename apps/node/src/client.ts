@@ -28,6 +28,10 @@ export interface ClientOptions {
   /* Injected in tests. */
   socketFactory?: (url: string) => WebSocket;
   onStateChange?: (state: ClientState) => void;
+  /* Fired once the durable token is on disk. The installer uses this to stop
+     here and hand the machine over to the service manager, rather than leaving
+     an enrollment process running that systemd knows nothing about. */
+  onEnrolled?: () => void;
 }
 
 export type ClientState = "connecting" | "enrolling" | "online" | "offline";
@@ -163,6 +167,7 @@ export class NodeClient {
         this.config = loadConfig(this.options.configPath);
         console.log(`Enrolled as ${this.config.name}. Token stored.`);
         this.setState("online");
+        this.options.onEnrolled?.();
         break;
       }
 

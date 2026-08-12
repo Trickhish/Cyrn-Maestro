@@ -39,7 +39,9 @@ export function NodesPanel({
       {install && (
         <div className="flex flex-col gap-2 border border-[var(--border-accent)] bg-raised rounded-lg p-3">
           <div className="text-[12.5px] text-secondary">
-            Run this on the machine you want to add. It is single-use and expires in 15 minutes.
+            Run this on the machine you want to add. It installs Bun if needed, enrols the
+            machine, and sets the node up as a service that starts at boot. The token is
+            single-use and expires in 15 minutes.
           </div>
           <div className="font-mono text-[11.5px] text-primary bg-inset border rule rounded px-2.5 py-2 overflow-x-auto scroll-quiet whitespace-nowrap">
             {install}

@@ -362,21 +362,24 @@ curl -fsSL https://maestro.cyrn.fr/install/nk_7f3a91c4e2b8 | sh
 
 The path segment *is* the enrollment token, so the server returns an install script already personalised: correct server URL, correct token, correct project. What it does:
 
-1. Detects OS and architecture, downloads the matching node binary, verifies its checksum.
-2. Writes `/etc/maestro/node.toml` (or `~/.config/maestro/node.toml` for a user install).
-3. Installs a service — systemd on Linux, launchd on macOS — and starts it.
-4. The daemon dials the server, sends `node.enroll`, and **exchanges the enrollment token for a durable node token** which it stores with `0600` permissions. The enrollment token is burned at that moment.
+1. Installs Bun if the machine does not already have it. An installer that stops to tell you to run a different command — and to come back with a token that has since expired — has not installed anything.
+2. Downloads the node daemon, bundled by the server into a single file, so there is nothing to resolve on the target machine.
+3. Enrols as a foreground step that exits: the daemon dials the server, sends `node.enroll`, and **exchanges the enrollment token for a durable node token** which it writes to `/etc/maestro/node.toml` (or `~/.config/maestro/node.toml`) with `0600` permissions. The enrollment token is burned at that moment. Bounded by a timeout, because an installer that hangs is worse than one that fails.
+4. Installs a systemd service and starts it — a system unit as root, a user unit with lingering enabled otherwise. **This is the default**: a node that stops when its terminal closes, and never comes back after a reboot, is not installed.
 5. The server provisions the project workspace, and the node shows up as online in the UI.
+
+Because enrolling and serving are separate steps, the durable token reaches the service through the config file rather than a command line, and never appears in `ps`.
 
 Flags, for when the defaults are wrong:
 
 ```bash
 curl -fsSL https://maestro.cyrn.fr/install/nk_7f3a91c4e2b8 | sh -s -- \
   --name build-box \        # defaults to the hostname
-  --user maestro \          # service account to run as
   --workspace-root /srv \   # where project checkouts land
-  --no-service              # just install the binary, don't daemonise
+  --no-service              # run in the foreground instead
 ```
+
+`--no-service` is for watching a node run once, and is also what happens automatically on a machine with no systemd. macOS launchd is not written yet, so a Mac falls back to the foreground.
 
 If piping a URL into a shell makes you uncomfortable — reasonable — the same token works the boring way:
 
@@ -389,7 +392,7 @@ The security properties that make the one-liner acceptable: the token is single-
 
 **Node ownership mirrors project ownership.** A node enrolled by an organization can host any of that org's projects and is managed by its admins; a node enrolled personally can only host its owner's personal projects. A node never crosses that line, so an org's code is never checked out onto a machine the org does not control.
 
-`maestro-node uninstall` reverses all of it and revokes the node server-side.
+Removing a node is `systemctl disable --now maestro-node`, deleting the unit and `~/.maestro`, and revoking it under **Connections → Nodes**. A single `maestro-node uninstall` that does all three is not written yet.
 
 ---
 

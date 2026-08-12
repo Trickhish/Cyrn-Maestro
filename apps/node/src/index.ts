@@ -17,6 +17,7 @@ if (process.argv.includes("--help")) {
 
   --server <url>       WebSocket URL of the Maestro server
   --enroll <token>     One-time enrollment token (first run only)
+  --enroll-only        Enroll, store the token, and exit without serving
   --name <name>        This node's name (defaults to the hostname)
   --workspace-root <p> Where project checkouts live
   --config <path>      Config file location
@@ -36,10 +37,22 @@ for (const [name, env] of [
   if (value) process.env[env] = value;
 }
 
+/* Enrolling and serving are separated so an installer can do the first as a
+   plain foreground step it can check the exit code of, then let a service
+   manager own the second. Running both in one process would mean the installer
+   either blocks forever or leaves an unsupervised daemon behind. */
+const enrollOnly = process.argv.includes("--enroll-only");
+
 const client = new NodeClient({
   enrollmentToken: flag("enroll"),
   configPath: process.env.MAESTRO_NODE_CONFIG,
   onStateChange: (state) => console.log(`[node] ${state}`),
+  onEnrolled: enrollOnly
+    ? () => {
+        client.stop();
+        process.exit(0);
+      }
+    : undefined,
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

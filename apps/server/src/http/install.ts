@@ -58,12 +58,10 @@ export function installScript(token: string): Response {
   const script = `#!/bin/sh
 # Maestro node installer.
 #
-# Enrolls this machine with ${origin} and starts the node daemon.
-# The enrollment token below is single-use and expires in ${Math.round(
-    config.enrollmentTtlMs / 60000,
-  )} minutes;
-# the daemon exchanges it over the socket for a durable token that is never
-# written to your shell history.
+# Enrolls this machine with ${origin} and installs the node as a service that
+# starts at boot. The enrollment token below is single-use and expires in
+# ${Math.round(config.enrollmentTtlMs / 60000)} minutes; the daemon exchanges it over the socket for a durable
+# token that is never written to your shell history.
 set -eu
 
 TOKEN="${token}"
@@ -78,14 +76,22 @@ while [ $# -gt 0 ]; do
     --workspace-root) WORKSPACE_ROOT="$2"; shift 2 ;;
     --no-service) INSTALL_SERVICE=0; shift ;;
     --help)
-      echo "Options: --name <name> --workspace-root <path> --no-service"
+      echo "Installs the Maestro node as a service and starts it."
+      echo
+      echo "Options:"
+      echo "  --name <name>            Node name (default: this machine's hostname)"
+      echo "  --workspace-root <path>  Where project checkouts live"
+      echo "  --no-service             Run in the foreground instead of installing a service"
       exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
 
+IS_ROOT=0
+[ "$(id -u)" = "0" ] && IS_ROOT=1
+
 if [ -z "$WORKSPACE_ROOT" ]; then
-  if [ "$(id -u)" = "0" ]; then WORKSPACE_ROOT=/srv/maestro; else WORKSPACE_ROOT="$HOME/maestro-workspaces"; fi
+  if [ "$IS_ROOT" = "1" ]; then WORKSPACE_ROOT=/srv/maestro; else WORKSPACE_ROOT="$HOME/maestro-workspaces"; fi
 fi
 
 echo "Maestro node installer"
@@ -94,11 +100,40 @@ echo "  name       $NAME"
 echo "  workspaces $WORKSPACE_ROOT"
 echo
 
-if ! command -v bun >/dev/null 2>&1; then
-  echo "Bun is required and was not found." >&2
-  echo "Install it with:  curl -fsSL https://bun.sh/install | bash" >&2
-  exit 1
+# --- Bun ---------------------------------------------------------------------
+# Installed rather than demanded. Telling someone to go and run a different
+# command, then come back and re-run this one with a token that may have expired
+# in the meantime, is not an install script.
+if command -v bun >/dev/null 2>&1; then
+  BUN="$(command -v bun)"
+elif [ -x "$HOME/.bun/bin/bun" ]; then
+  BUN="$HOME/.bun/bin/bun"
+else
+  echo "Bun is not installed. Installing it from https://bun.sh ..."
+  if ! command -v unzip >/dev/null 2>&1; then
+    echo "  (bun's installer needs unzip, which is missing)" >&2
+    echo "  Install it with your package manager, then run this command again." >&2
+    exit 1
+  fi
+  curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1 || {
+    echo "Bun could not be installed automatically." >&2
+    echo "Install it by hand with:  curl -fsSL https://bun.sh/install | bash" >&2
+    exit 1
+  }
+  BUN="$HOME/.bun/bin/bun"
+  if [ ! -x "$BUN" ]; then
+    echo "Bun installed but was not found at $BUN." >&2
+    exit 1
+  fi
+  echo "  installed $("$BUN" --version)"
 fi
+
+# The service file needs an absolute path: systemd starts with a bare PATH and
+# would not find a bun living under a home directory.
+case "$BUN" in
+  /*) ;;
+  *) BUN="$(cd "$(dirname "$BUN")" && pwd)/$(basename "$BUN")" ;;
+esac
 
 mkdir -p "$WORKSPACE_ROOT"
 
@@ -107,28 +142,104 @@ INSTALL_DIR="\${MAESTRO_INSTALL_DIR:-$HOME/.maestro}"
 mkdir -p "$INSTALL_DIR"
 curl -fsSL "${origin}/install/${token}/daemon.js" -o "$INSTALL_DIR/maestro-node.js"
 
+# --- enrolment ---------------------------------------------------------------
+# Done as its own foreground step so its exit code means something. It stores
+# the durable token and returns; serving is the service's job.
+# A server that is unreachable makes the daemon retry with backoff forever, so
+# the step is bounded. An installer that hangs is worse than one that fails.
+LIMIT=""
+command -v timeout >/dev/null 2>&1 && LIMIT="timeout 90"
+
 echo "Enrolling..."
 MAESTRO_SERVER="$SERVER" \\
 MAESTRO_NODE_NAME="$NAME" \\
 MAESTRO_WORKSPACE_ROOT="$WORKSPACE_ROOT" \\
-  bun "$INSTALL_DIR/maestro-node.js" --enroll "$TOKEN" &
+  $LIMIT "$BUN" "$INSTALL_DIR/maestro-node.js" --enroll "$TOKEN" --enroll-only || {
+    STATUS=$?
+    if [ "$STATUS" = "124" ]; then
+      echo "Enrolment timed out. Is ${origin} reachable from this machine?" >&2
+    else
+      echo "Enrolment failed. The token may have expired or already been used." >&2
+    fi
+    exit 1
+  }
 
-DAEMON_PID=$!
-sleep 4
-
-if kill -0 "$DAEMON_PID" 2>/dev/null; then
-  echo
-  echo "Node is running (pid $DAEMON_PID)."
-  if [ "$INSTALL_SERVICE" = "1" ] && [ "$(id -u)" = "0" ] && command -v systemctl >/dev/null 2>&1; then
-    echo "To keep it running across reboots, install the systemd unit:"
-    echo "  see deploy/maestro-node.service in the repository"
+# --- service -----------------------------------------------------------------
+if [ "$INSTALL_SERVICE" = "1" ] && command -v systemctl >/dev/null 2>&1; then
+  if [ "$IS_ROOT" = "1" ]; then
+    UNIT=/etc/systemd/system/maestro-node.service
+    SYSTEMCTL="systemctl"
+    JOURNAL="journalctl"
+    WANTED_BY=multi-user.target
+  else
+    UNIT="$HOME/.config/systemd/user/maestro-node.service"
+    SYSTEMCTL="systemctl --user"
+    JOURNAL="journalctl --user"
+    WANTED_BY=default.target
+    mkdir -p "$HOME/.config/systemd/user"
   fi
-  echo "It should now appear in the fleet view at ${origin}."
-  wait "$DAEMON_PID"
+
+  echo "Installing the service at $UNIT ..."
+  cat > "$UNIT" <<UNITEOF
+[Unit]
+Description=Maestro node
+Documentation=${origin}
+After=network-online.target
+Wants=network-online.target
+# The node dials out and can be restarted at any time, so a slow crash loop is
+# better than a fast one against a server that is briefly down.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=$BUN $INSTALL_DIR/maestro-node.js
+WorkingDirectory=$WORKSPACE_ROOT
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=$WANTED_BY
+UNITEOF
+
+  $SYSTEMCTL daemon-reload
+  $SYSTEMCTL enable maestro-node.service >/dev/null 2>&1 || true
+  $SYSTEMCTL restart maestro-node.service
+
+  # Without lingering, a user service stops the moment you log out — which is
+  # exactly when you stop watching it.
+  if [ "$IS_ROOT" != "1" ] && command -v loginctl >/dev/null 2>&1; then
+    WHO="$(id -un 2>/dev/null || id -u)"
+    loginctl enable-linger "$WHO" >/dev/null 2>&1 ||
+      echo "  note: could not enable lingering, so the node will stop when you log out."
+  fi
+
+  sleep 2
+  if $SYSTEMCTL is-active --quiet maestro-node.service; then
+    echo
+    echo "The node is enrolled and running as a service. It will start at boot."
+    echo "  status  $SYSTEMCTL status maestro-node"
+    echo "  logs    $JOURNAL -u maestro-node -f"
+  else
+    echo
+    echo "The service was installed but is not running. Its logs:" >&2
+    $JOURNAL -u maestro-node -n 20 --no-pager >&2 || true
+    exit 1
+  fi
 else
-  echo "The daemon exited during enrollment. Check the output above." >&2
-  exit 1
+  if [ "$INSTALL_SERVICE" = "1" ]; then
+    echo "systemd was not found, so the node will run here in the foreground."
+    echo "Keep this shell open, or supervise it with whatever this machine uses."
+  fi
+  echo
+  MAESTRO_SERVER="$SERVER" \\
+  MAESTRO_NODE_NAME="$NAME" \\
+  MAESTRO_WORKSPACE_ROOT="$WORKSPACE_ROOT" \\
+    exec "$BUN" "$INSTALL_DIR/maestro-node.js"
 fi
+
+echo "It should now appear under Connections → Nodes at ${origin}."
 `;
 
   return new Response(script, {
