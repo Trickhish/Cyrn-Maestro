@@ -123,11 +123,20 @@ providerRoutes.post("/:id/refresh", async (c) => {
 
   if (!row) throw new NotFound();
 
-  /* Probing costs a few tokens per model and takes a few seconds, so it is
-     opt-out rather than automatic on every refresh. It is on by default because
-     a model list that lies is worse than a short one — this provider advertises
-     26 models and can actually route 18. */
-  const shouldProbe = c.req.query("probe") !== "0";
+  /* Probing costs a real API call per model — two, for the ones that need a
+     reasoning retry. That is worth it for a list of twenty and absurd for a
+     gateway advertising several hundred: minutes of waiting, hundreds of
+     billable calls, and a rate limit hit partway through.
+   *
+     So it is capped. Models past the cap keep probeOk = null, which already
+     means "not known to be broken" everywhere it is read — they stay usable
+     and simply carry no verdict, and one that turns out not to work surfaces
+     the provider's own error at the moment it is used.
+   *
+     ?probe=0 skips entirely; ?probe=all forces the whole list. */
+  const probeMode = c.req.query("probe") ?? "";
+  const shouldProbe = probeMode !== "0";
+  const probeLimit = probeMode === "all" ? Number.POSITIVE_INFINITY : PROBE_LIMIT;
 
   try {
     const adapter = adapterFor(row);
@@ -153,14 +162,21 @@ providerRoutes.post("/:id/refresh", async (c) => {
     }
 
     let usable = models.length;
+    let probed = 0;
 
     if (shouldProbe) {
-      const results = await mapWithConcurrency(models, 6, async (model) => ({
+      /* Probe the ones most likely to be reached first, so a capped run still
+         verifies what the router would actually pick. */
+      const ordered = [...models].sort((a, b) => rankForProbing(a.id) - rankForProbing(b.id));
+      const toProbe = ordered.slice(0, probeLimit);
+
+      const results = await mapWithConcurrency(toProbe, 6, async (model) => ({
         modelId: model.id,
         result: await adapter.probe(model.id),
       }));
 
-      usable = results.filter((r) => r.result.ok).length;
+      probed = results.length;
+      usable = results.filter((r) => r.result.ok).length + (models.length - probed);
 
       for (const { modelId, result } of results) {
         await db
@@ -197,7 +213,14 @@ providerRoutes.post("/:id/refresh", async (c) => {
       .set({ lastHealthAt: Date.now(), lastHealthOk: true })
       .where(eq(schema.providerConnections.id, row.id));
 
-    return c.json({ count: models.length, usable, probed: shouldProbe });
+    return c.json({
+      count: models.length,
+      usable,
+      probed,
+      /* Stated rather than implied: a caller should know the difference between
+         "verified working" and "listed but never tried". */
+      unprobed: models.length - probed,
+    });
   } catch (err) {
     await db
       .update(schema.providerConnections)
@@ -211,8 +234,25 @@ providerRoutes.post("/:id/refresh", async (c) => {
   }
 });
 
-/* Probing 26 models serially would take most of a minute. Bounded concurrency
-   keeps it quick without opening 26 sockets at a rate limiter. */
+/* How many models a refresh will verify before giving up on the rest. Chosen so
+   an ordinary provider is fully checked while a gateway advertising hundreds
+   does not turn a button press into five minutes and a rate limit. */
+const PROBE_LIMIT = 40;
+
+/* Which models are worth the probe budget. The router prefers the tier a task
+   needs and falls back upward, so the frontier models are the ones a capped
+   run should verify; dated snapshots and obscure variants can wait until
+   something actually asks for them. */
+export function rankForProbing(modelId: string): number {
+  const id = modelId.toLowerCase();
+  if (/(opus|sonnet|gpt-5|gemini-3|haiku)/.test(id) && !/\d{8}$/.test(id)) return 0;
+  if (/(opus|sonnet|gpt|gemini|haiku|llama|mistral|deepseek|qwen)/.test(id)) return 1;
+  return 2;
+}
+
+/* Probing serially would take most of a minute even for a short list. Bounded
+   concurrency keeps it quick without opening dozens of sockets at a rate
+   limiter. */
 async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,
