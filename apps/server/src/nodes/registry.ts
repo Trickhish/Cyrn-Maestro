@@ -308,7 +308,15 @@ async function register(
   session.nodeId = row.id;
   live.set(row.id, {
     nodeId: row.id,
-    name: identity.name,
+    /* The stored row, not identity.name: a rename lives in the database and
+       in the live entry for exactly as long as that socket stays open —
+       nothing on the daemon itself knows about it — so the very next
+       reconnect (a server restart, a network blip) would otherwise overwrite
+       it with whatever the daemon still believes its own name is. Everything
+       else here — os, arch, capabilities — genuinely is a live property of
+       the connected machine and is right to take from identity; the name is a
+       label the user chose to override. */
+    name: row.name,
     ownerUserId: row.ownerUserId,
     ownerOrgId: row.ownerOrgId,
     socket,

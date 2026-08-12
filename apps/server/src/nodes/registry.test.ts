@@ -161,6 +161,36 @@ describe("registration", () => {
     expect(socket.closed).toBe(true);
   });
 
+  /* renameLiveNode() only reaches the socket that is open right now — the
+     enduring identity has to be the database row, or the very next reconnect
+     (a server restart, a network blip) resurrects the name the daemon still
+     believes is its own, and a rename that stuck for as long as nobody
+     restarted anything reads as a rename that silently did not work. */
+  test("a reconnect uses the row's name, not what the daemon still calls itself", async () => {
+    const { socket, session } = await enrolled();
+    const savedToken = socket.ofType("node.enrolled").nodeToken;
+
+    await db.update(schema.nodes).set({ name: "MAIN.SRV" }).where(eq(schema.nodes.id, session.nodeId!));
+
+    const reconnect = fakeSocket();
+    await handleNodeMessage(
+      {},
+      reconnect,
+      JSON.stringify({
+        type: "node.register",
+        id: newId(),
+        nodeToken: savedToken,
+        /* The daemon itself was never told about the rename, so it still
+           reports the name it was installed with. */
+        node: { ...identity, name: "test-node" },
+        runningTaskIds: [],
+      }),
+    );
+
+    const [node] = onlineNodes({ ownerUserId: OWNER });
+    expect(node!.name).toBe("MAIN.SRV");
+  });
+
   test("running tasks are reported so the server can re-attach", async () => {
     const { socket } = await enrolled();
     const nodeToken = socket.ofType("node.enrolled").nodeToken;
