@@ -12,7 +12,7 @@ export type View =
   | { name: "project"; projectId: string }
   | { name: "task"; taskId: string }
   | { name: "conductor" }
-  | { name: "connections"; tab?: "nodes" | "providers" | "mcp" }
+  | { name: "connections"; tab?: "nodes" | "providers" | "mcp" | "models" }
   | { name: "org" }
   | { name: "activity" }
   | { name: "settings" }

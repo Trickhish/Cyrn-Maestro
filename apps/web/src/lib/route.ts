@@ -12,7 +12,7 @@ export function viewFromHash(hash: string): View | undefined {
   if (kind === "p" && id) return { name: "project", projectId: id };
   if (kind === "conductor") return { name: "conductor" };
   if (kind === "connections") {
-    const tab = id === "providers" || id === "mcp" ? id : "nodes";
+    const tab = id === "providers" || id === "mcp" || id === "models" ? id : "nodes";
     return { name: "connections", tab };
   }
   /* The old name, so links people already have keep working. */

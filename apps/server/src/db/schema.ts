@@ -268,6 +268,56 @@ export const models = sqliteTable(
   (t) => [unique("models_provider_model_unique").on(t.providerId, t.modelId)],
 );
 
+/* A named, ordered fallback chain of models for one kind of work — "difficult
+ * programming", "tester", "decision maker" — with a short description of when
+ * it applies. Not the tier system: a tier is a coarse, automatic guess from a
+ * model's name, used for routing rules and defaults; a list is curated by
+ * hand, named for a purpose rather than a size, and meant to be read by
+ * whatever ends up choosing a model per task — the description is written for
+ * that reader, not for a human skimming a settings page.
+ *
+ * Entries store the model's string id rather than a foreign key to one
+ * provider's `models` row, matching how a routing rule's `setModelId` already
+ * works: the same model id can be served by more than one provider
+ * connection, and "tried one by one until one is available" means available
+ * from any of them, not tied to where it was when the list was built. */
+export const modelLists = sqliteTable(
+  "model_lists",
+  {
+    id: id(),
+    ownerUserId: text("owner_user_id").references(() => users.id, { onDelete: "cascade" }),
+    ownerOrgId: text("owner_org_id").references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    createdAt: now(),
+  },
+  (t) => [
+    unique("model_lists_user_name_unique").on(t.ownerUserId, t.name),
+    unique("model_lists_org_name_unique").on(t.ownerOrgId, t.name),
+    index("model_lists_org_idx").on(t.ownerOrgId),
+  ],
+);
+
+export const modelListEntries = sqliteTable(
+  "model_list_entries",
+  {
+    id: id(),
+    listId: text("list_id")
+      .notNull()
+      .references(() => modelLists.id, { onDelete: "cascade" }),
+    modelId: text("model_id").notNull(),
+    /* Preference order, lowest first. An explicit column rather than row
+       order because SQL never promises to hand rows back in insertion order —
+       relying on that is how a list quietly reshuffles itself one day. */
+    position: integer("position").notNull(),
+    createdAt: now(),
+  },
+  (t) => [
+    unique("model_list_entries_unique").on(t.listId, t.modelId),
+    index("model_list_entries_list_idx").on(t.listId),
+  ],
+);
+
 export const projects = sqliteTable(
   "projects",
   {

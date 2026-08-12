@@ -227,6 +227,19 @@ export interface McpServer {
   lastConnectedAt: number | null;
 }
 
+export interface ModelListEntry {
+  id: string;
+  modelId: string;
+}
+
+export interface ModelList {
+  id: string;
+  name: string;
+  description: string | null;
+  createdAt: number;
+  entries: ModelListEntry[];
+}
+
 export interface GatewayService {
   id: string;
   name: string;
@@ -257,6 +270,22 @@ export const api = {
   updateMcpServer: (id: string, body: Record<string, unknown>) =>
     request<{ ok: true }>(`/mcp/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteMcpServer: (id: string) => request<{ ok: true }>(`/mcp/${id}`, { method: "DELETE" }),
+
+  modelLists: () => request<{ lists: ModelList[] }>("/model-lists"),
+  createModelList: (name: string, description: string | null) =>
+    post<{ list: ModelList }>("/model-lists", { name, description }),
+  updateModelList: (id: string, body: { name?: string; description?: string | null }) =>
+    request<{ ok: true }>(`/model-lists/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteModelList: (id: string) => request<{ ok: true }>(`/model-lists/${id}`, { method: "DELETE" }),
+  addModelListEntry: (listId: string, modelId: string) =>
+    post<{ id: string }>(`/model-lists/${listId}/entries`, { modelId }),
+  removeModelListEntry: (listId: string, entryId: string) =>
+    request<{ ok: true }>(`/model-lists/${listId}/entries/${entryId}`, { method: "DELETE" }),
+  reorderModelList: (listId: string, entryIds: string[]) =>
+    request<{ ok: true }>(`/model-lists/${listId}/order`, {
+      method: "PUT",
+      body: JSON.stringify({ entryIds }),
+    }),
 
   account: () =>
     request<{
