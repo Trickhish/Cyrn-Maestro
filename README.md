@@ -448,6 +448,8 @@ Configuration is per project, in `.maestro/mcp.json` or through the UI:
 
 Secrets are referenced, never inlined: `{{secret.*}}` resolves from the owning scope's encrypted store — an org project resolves org secrets, a personal project resolves personal ones — and for a node-side server the resolved value is injected into the child process environment and never written to disk.
 
+**Gateways** — some hosts front several MCP services behind one key and one domain, so connecting them one at a time means pasting the same credential nine times. Give Maestro the gateway's base URL and a key and it asks what that key can reach, then connects the services you pick. Each becomes an ordinary server connection afterwards — separately named, scoped, enabled and approved — because a gateway is a convenience at setup time, not a category of thing the agent should have to know about. Enumerating services is not part of MCP, so this follows the convention the gateway publishes (`GET /api/services`); a host that does not answer that way is still connected one service at a time.
+
 Tools are namespaced by server (`github__create_pull_request`) so two servers cannot collide. Every project has a tool picker — an MCP server can advertise forty tools and you rarely want all forty in context — and each tool carries an approval setting: auto, ask, or never.
 
 ---
