@@ -10,6 +10,7 @@ import { config } from "../config";
 import { append, conversationFrom } from "./events";
 import { resolveProvider, estimateCost, NoProviderError } from "../providers/gateway";
 import { streamWithFailover } from "./failover";
+import { collectSkills, fetchSkillBody, skillsPromptSection, recordSkillProblems, LOAD_SKILL_TOOL, type SkillSummary } from "./skills";
 import { checkSpend } from "../router/spend";
 import { ProviderError } from "../providers/types";
 import { awaitResult, sendToNode, subscribeToTask, getLiveNode, noteReleased } from "../nodes/registry";
@@ -174,7 +175,14 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
     }
   });
 
-  const system = [SYSTEM_PROMPT, project.instructions].filter(Boolean).join("\n\n");
+  /* The node reports what the current checkout contains, so skills follow the
+     branch rather than a copy the server took at some point in the past. */
+  const { skills, problems } = await collectSkills(taskId);
+  recordSkillProblems(taskId, problems);
+
+  const system = [SYSTEM_PROMPT, project.instructions, skillsPromptSection(skills)]
+    .filter(Boolean)
+    .join("\n\n");
   let toolCallCount = 0;
   const startedAt = Date.now();
 
@@ -220,6 +228,9 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
             taskId,
             system,
             messages,
+            /* Offered only when there is something to load; a tool with nothing
+               behind it is an invitation to hallucinate a skill name. */
+            extraTools: skills.length > 0 ? [LOAD_SKILL_TOOL as never] : [],
           },
           state.abort.signal,
         )) {
@@ -309,7 +320,11 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
           return;
         }
 
-        await executeCall(taskId, task.nodeId!, call, state);
+        if (call.name === LOAD_SKILL_TOOL.name) {
+          await loadSkillCall(taskId, task.nodeId!, call, skills);
+        } else {
+          await executeCall(taskId, task.nodeId!, call, state);
+        }
         if (state.abort.signal.aborted) break;
       }
     }
@@ -323,6 +338,59 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
   } finally {
     unsubscribe();
   }
+}
+
+/* load_skill is answered by the server, not the node's tool executor: it is a
+   Maestro concept rather than a filesystem operation, and the model must not
+   be able to reach arbitrary files by naming them as a skill. */
+async function loadSkillCall(
+  taskId: string,
+  nodeId: string,
+  call: { id: string; name: string; argumentsJson: string },
+  skills: SkillSummary[],
+): Promise<void> {
+  let name = "";
+  try {
+    name = String((JSON.parse(call.argumentsJson || "{}") as { name?: unknown }).name ?? "");
+  } catch {
+    /* Handled below as an unknown skill. */
+  }
+
+  /* Recorded under its real name so the conversation rebuilt for the next turn
+     matches what the model actually called. */
+  append(taskId, {
+    kind: "tool_call",
+    callId: call.id,
+    tool: LOAD_SKILL_TOOL.name,
+    args: { name },
+    summary: `skill ${name}`,
+  });
+
+  /* Only skills the node actually reported. Without this check the name is an
+     arbitrary path fragment the model chose. */
+  const known = skills.find((skill) => skill.name === name);
+  if (!known) {
+    append(taskId, {
+      kind: "tool_result",
+      callId: call.id,
+      ok: false,
+      output: `There is no skill called "${name}". Available: ${
+        skills.map((s) => s.name).join(", ") || "none"
+      }.`,
+    });
+    return;
+  }
+
+  const body = await fetchSkillBody(taskId, nodeId, name);
+
+  append(taskId, {
+    kind: "tool_result",
+    callId: call.id,
+    ok: Boolean(body),
+    output:
+      body ??
+      `The skill "${name}" could not be read from the workspace. Continue without it.`,
+  });
 }
 
 async function executeCall(

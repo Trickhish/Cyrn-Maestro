@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { ToolNameSchema } from "./tools";
 
 /* task_events — the source of truth.
  *
@@ -54,7 +53,16 @@ export const ToolCallEvent = z.object({
   ...base,
   kind: z.literal("tool_call"),
   callId: z.string(),
-  tool: ToolNameSchema,
+  /* A plain string, not the node's tool enum.
+   *
+   * The event log has to represent every tool the agent actually used —
+   * the node's, the server's own (load_skill), and MCP tools whose names come
+   * from a third party. Forcing them into the node's enum meant recording a
+   * load_skill call as a read_file, so the conversation rebuilt for the next
+   * turn told the model its call had never happened and it repeated the call
+   * on every turn. Execution is still validated against the enum at the point
+   * it reaches the node; this field is a record of what occurred. */
+  tool: z.string(),
   args: z.unknown(),
   summary: z.string().describe("The one-line collapsed form, e.g. the path or the command."),
 });
@@ -84,7 +92,7 @@ export const ApprovalRequestedEvent = z.object({
   ...base,
   kind: z.literal("approval_requested"),
   callId: z.string(),
-  tool: ToolNameSchema,
+  tool: z.string(),
   summary: z.string(),
   reason: z.string(),
 });

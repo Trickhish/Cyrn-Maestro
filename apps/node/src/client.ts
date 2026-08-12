@@ -9,6 +9,7 @@ import {
 import { Workspace } from "./workspace";
 import { executeTool } from "./tools";
 import { evaluate } from "./policy";
+import { discoverSkills, readSkillBody } from "./skills";
 import { loadConfig, saveToken, nodeIdentity, type NodeConfig } from "./config";
 
 /* The node daemon's socket client.
@@ -203,6 +204,19 @@ export class NodeClient {
         break;
       }
 
+      case "skill.fetch": {
+        const task = this.running.get(message.taskId);
+        this.send({
+          type: "skill.body",
+          id: newId(),
+          taskId: message.taskId,
+          requestId: message.requestId,
+          name: message.name,
+          body: task ? await readSkillBody(task.workspace, message.name) : null,
+        });
+        break;
+      }
+
       case "task.cancel": {
         const task = this.running.get(message.taskId);
         task?.abort.abort();
@@ -235,6 +249,34 @@ export class NodeClient {
       const workspace = await Workspace.open(path);
       this.running.set(taskId, { workspace, abort: new AbortController() });
       this.send({ type: "task.accepted", id: newId(), taskId });
+
+      /* Reported from the checkout, because skills version with the branch and
+         only this machine knows what the branch currently holds. Failing to
+         read them must not fail the task — an agent with no skills is still an
+         agent. */
+      try {
+        const { skills, problems } = await discoverSkills(workspace);
+        this.send({
+          type: "skills.found",
+          id: newId(),
+          taskId,
+          skills: skills.map((s) => ({
+            name: s.name,
+            description: s.description,
+            version: s.version,
+            path: s.path,
+          })),
+          problems,
+        });
+      } catch (err) {
+        this.send({
+          type: "skills.found",
+          id: newId(),
+          taskId,
+          skills: [],
+          problems: [{ path: ".maestro/skills", message: (err as Error).message }],
+        });
+      }
     } catch (err) {
       this.send({
         type: "task.rejected",

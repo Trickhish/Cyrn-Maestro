@@ -102,6 +102,35 @@ export const TaskLog = z.object({
   chunk: z.string(),
 });
 
+/* What the checkout on this node currently contains. Reported when a task is
+   accepted, because skills version with the branch — the server cannot know
+   them without asking the machine holding the code. */
+export const SkillsFound = z.object({
+  type: z.literal("skills.found"),
+  id: z.string(),
+  taskId: z.string(),
+  skills: z.array(
+    z.object({
+      name: z.string(),
+      description: z.string(),
+      version: z.string().optional(),
+      path: z.string(),
+    }),
+  ),
+  /* Surfaced rather than swallowed: a skill its author believes is active but
+     that never loads is worse than an error. */
+  problems: z.array(z.object({ path: z.string(), message: z.string() })).default([]),
+});
+
+export const SkillBody = z.object({
+  type: z.literal("skill.body"),
+  id: z.string(),
+  taskId: z.string(),
+  requestId: z.string(),
+  name: z.string(),
+  body: z.string().nullable(),
+});
+
 export const TaskDone = z.object({
   type: z.literal("task.done"),
   id: z.string(),
@@ -120,6 +149,8 @@ export const NodeMessage = z.discriminatedUnion("type", [
   ToolApprovalRequest,
   TaskLog,
   TaskDone,
+  SkillsFound,
+  SkillBody,
 ]);
 
 /* ---------------------------------------------------------------- server → node */
@@ -180,6 +211,16 @@ export const ToolCall = z.object({
   approved: z.boolean().optional(),
 });
 
+/* Asks the node for one skill's body, once the model has decided it is
+   relevant. */
+export const SkillFetch = z.object({
+  type: z.literal("skill.fetch"),
+  id: z.string(),
+  taskId: z.string(),
+  requestId: z.string(),
+  name: z.string(),
+});
+
 export const TaskCancel = z.object({
   type: z.literal("task.cancel"),
   id: z.string(),
@@ -212,6 +253,7 @@ export const ServerMessage = z.discriminatedUnion("type", [
   ToolCall,
   TaskCancel,
   TaskRelease,
+  SkillFetch,
   Ping,
 ]);
 

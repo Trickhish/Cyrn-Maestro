@@ -1,4 +1,5 @@
 import { candidatesFor, resolveProvider, toolDefinitions, type ResolvedProvider } from "../providers/gateway";
+import type { ToolDefinition } from "../providers/types";
 import { ProviderError, type ChatMessage, type StreamEvent } from "../providers/types";
 import { append } from "./events";
 
@@ -23,6 +24,8 @@ export interface FailoverContext {
   taskId: string;
   system: string;
   messages: ChatMessage[];
+  /* Tools beyond the node's own — load_skill, and later the MCP ones. */
+  extraTools?: ToolDefinition[];
 }
 
 export async function* streamWithFailover(
@@ -69,7 +72,7 @@ export async function* streamWithFailover(
         {
           model: provider.model,
           messages: [{ role: "system", content: context.system }, ...context.messages],
-          tools: toolDefinitions(),
+          tools: [...toolDefinitions(), ...(context.extraTools ?? [])],
           maxTokens: 8192,
           reasoningEffort: provider.reasoningEffort,
         },
