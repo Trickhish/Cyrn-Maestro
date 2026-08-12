@@ -5,6 +5,7 @@ import { db, schema } from "../db";
 import { append, replayForDisplay, subscribe, lastSeq } from "../tasks/events";
 import { startTask, steer, cancel, decideApproval, isRunning } from "../tasks/runner";
 import { onlineNodes, loadOf, noteAssigned } from "../nodes/registry";
+import { planRoute } from "../router";
 import { assertCan, projectScope, taskScope } from "../lib/permissions";
 import { BadRequest, NotFound, requireActor, type Env } from "./context";
 import { record } from "../lib/audit";
@@ -66,33 +67,40 @@ taskRoutes.post("/", async (c) => {
   if (!scope) throw new NotFound();
   await assertCan(actor, "task.run", scope);
 
-  /* Manual dispatch in v0.1: the router lands in v0.4. Until then, honour the
-     named node, or pick the least loaded online one so two tasks dispatched
-     back to back do not pile onto the same machine while another sits idle. */
-    /* Nodes belonging to whoever owns the PROJECT, not to whoever pressed the
-     button. A member's personal laptop is not org capacity. */
-  const available = onlineNodes(scope);
+  /* The router picks a node and a model and says why. An explicit choice from
+     the caller wins; otherwise it scores what is actually available now.
+     Nodes belong to whoever owns the PROJECT, not to whoever pressed the
+     button — a member's personal laptop is not org capacity. */
+  const [projectRow] = await db
+    .select({ defaultModelId: schema.projects.defaultModelId })
+    .from(schema.projects)
+    .where(eq(schema.projects.id, parsed.data.projectId))
+    .limit(1);
 
-  if (available.length === 0) {
-    throw new BadRequest("No node is online. Install one from Fleet → Add node, then try again.");
+  const plan = await planRoute({
+    owner: scope,
+    prompt: parsed.data.prompt,
+    projectId: parsed.data.projectId,
+    pinnedNodeId: parsed.data.nodeId ?? null,
+    pinnedModel: parsed.data.model ?? null,
+    projectDefaultModel: projectRow?.defaultModelId ?? null,
+  });
+
+  if (plan.blocked || !plan.node || !plan.model) {
+    /* "Every node is busy" reads differently from "there are no nodes", and
+       the router already knows which it is. */
+    const online = onlineNodes(scope);
+    const allBusy = online.length > 0 && online.every((n) => loadOf(n) >= n.maxConcurrentTasks);
+    throw new BadRequest(
+      allBusy
+        ? "Every node is at capacity. Wait for a task to finish, or add another machine."
+        : (plan.blocked ?? "Could not route this task."),
+    );
   }
 
-  let node;
-  if (parsed.data.nodeId) {
-    node = available.find((n) => n.nodeId === parsed.data.nodeId);
-    if (!node) throw new BadRequest("That node is not online.");
-  } else {
-    const withRoom = available.filter((n) => loadOf(n) < n.maxConcurrentTasks);
-    /* Every node full is worth saying plainly — the alternative is a task that
-       is accepted and then rejected by the node for reasons the user cannot
-       see. */
-    if (withRoom.length === 0) {
-      throw new BadRequest(
-        "Every node is at capacity. Wait for a task to finish, or add another machine.",
-      );
-    }
-    node = withRoom.sort((a, b) => loadOf(a) - loadOf(b))[0];
-  }
+  const routedNode = plan.node;
+  const routedModel = plan.model;
+  const node = onlineNodes(scope).find((n) => n.nodeId === routedNode.picked.id)!;
 
   /* A workspace row per (project, node) so the node knows where to work. */
   const [existing] = await db
@@ -142,7 +150,7 @@ taskRoutes.post("/", async (c) => {
     title,
     prompt: parsed.data.prompt,
     status: "queued",
-    model: parsed.data.model ?? null,
+    model: routedModel.picked.id,
     costUsd: 0,
     inputTokens: 0,
     outputTokens: 0,
@@ -150,6 +158,14 @@ taskRoutes.post("/", async (c) => {
   });
 
   append(taskId, { kind: "status", status: "queued" });
+  /* Recorded before anything runs, so the thread can always answer "why this
+     machine and this model" without anyone reconstructing it afterwards. */
+  append(taskId, {
+    kind: "routing_decision",
+    nodeName: plan.node.picked.name,
+    model: routedModel.picked.id,
+    because: `${plan.node.because}; ${plan.model.because}`,
+  });
   append(taskId, { kind: "user_message", text: parsed.data.prompt, queued: false });
 
   /* Tell the node to make the workspace, then run. Not awaited: the response
@@ -172,6 +188,46 @@ taskRoutes.post("/", async (c) => {
   void startTask(taskId);
 
   return c.json({ task: { id: taskId, title, status: "queued" } }, 201);
+});
+
+/* What the router would do, without doing it.
+ *
+ * This is what makes automatic routing trustworthy: the composer shows the
+ * node, the model and the reasoning BEFORE dispatch, with the alternatives
+ * one click away. Explaining a choice after the fact is not the same thing. */
+taskRoutes.post("/plan", async (c) => {
+  const actor = requireActor(c);
+
+  const parsed = z
+    .object({
+      projectId: z.string(),
+      prompt: z.string().default(""),
+      nodeId: z.string().optional(),
+      model: z.string().optional(),
+    })
+    .safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) throw new BadRequest("Check the request.");
+
+  const scope = await projectScope(parsed.data.projectId);
+  if (!scope) throw new NotFound();
+  await assertCan(actor, "task.read", scope);
+
+  const [row] = await db
+    .select({ defaultModelId: schema.projects.defaultModelId })
+    .from(schema.projects)
+    .where(eq(schema.projects.id, parsed.data.projectId))
+    .limit(1);
+
+  return c.json(
+    await planRoute({
+      owner: scope,
+      prompt: parsed.data.prompt,
+      projectId: parsed.data.projectId,
+      pinnedNodeId: parsed.data.nodeId ?? null,
+      pinnedModel: parsed.data.model ?? null,
+      projectDefaultModel: row?.defaultModelId ?? null,
+    }),
+  );
 });
 
 taskRoutes.get("/:id", async (c) => {

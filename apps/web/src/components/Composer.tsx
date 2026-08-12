@@ -10,9 +10,12 @@ interface ComposerProps {
   chip?: string;
   live?: boolean;
   onSend?: (value: string) => void;
+  /* Reported as it is typed so the routing chips can re-plan against the
+     actual prompt rather than an empty one. */
+  onChange?: (value: string) => void;
 }
 
-export function Composer({ placeholder, hints, chip, live, onSend }: ComposerProps) {
+export function Composer({ placeholder, hints, chip, live, onSend, onChange }: ComposerProps) {
   const [value, setValue] = useState("");
   const [queued, setQueued] = useState<string[]>([]);
 
@@ -54,7 +57,10 @@ export function Composer({ placeholder, hints, chip, live, onSend }: ComposerPro
         )}
         <input
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => {
+            setValue(e.target.value);
+            onChange?.(e.target.value);
+          }}
           placeholder={placeholder}
           aria-label={placeholder}
         />

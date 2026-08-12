@@ -1,0 +1,1 @@
+ALTER TABLE `models` ADD `tier_source` text DEFAULT 'inferred' NOT NULL;

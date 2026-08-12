@@ -36,6 +36,13 @@
       "when": 1786518938879,
       "tag": "0004_low_shooting_star",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1786520246865,
+      "tag": "0005_motionless_golden_guardian",
+      "breakpoints": true
     }
   ]
 }

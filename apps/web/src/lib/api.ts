@@ -128,7 +128,8 @@ export interface TaskDetail extends TaskSummary {
 export interface ProviderModel {
   id: string;
   modelId: string;
-  tier: string;
+  tier: "light" | "standard" | "heavy";
+  tierSource: "inferred" | "manual";
   contextWindow: number | null;
   enabled: boolean;
   probeOk: boolean | null;
@@ -232,12 +233,27 @@ export const api = {
     post<{ provider: Provider }>("/providers", body),
   refreshProvider: (id: string) =>
     post<{ count: number; usable: number }>(`/providers/${id}/refresh`),
+  setModelTier: (providerId: string, modelId: string, tier: string) =>
+    request<{ ok: true }>(`/providers/${providerId}/models/${encodeURIComponent(modelId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ tier }),
+    }),
+  reclassifyModels: (providerId: string) =>
+    post<{ reclassified: number }>(`/providers/${providerId}/models/reclassify`),
 
   tasks: (projectId?: string) =>
     request<{ tasks: TaskSummary[] }>(`/tasks${projectId ? `?projectId=${projectId}` : ""}`),
   task: (id: string) => request<{ task: TaskDetail; events: TaskEvent[] }>(`/tasks/${id}`),
   createTask: (body: { projectId: string; prompt: string; model?: string; nodeId?: string }) =>
     post<{ task: { id: string; title: string; status: TaskStatus } }>("/tasks", body),
+  planTask: (body: { projectId: string; prompt: string; nodeId?: string; model?: string }) =>
+    post<{
+      node: { picked: { id: string; name: string }; because: string; alternatives: Array<{ id: string; name: string }> } | null;
+      model: { picked: { id: string; tier: string }; because: string; alternatives: Array<{ id: string; tier: string }> } | null;
+      tier: string;
+      approvals: string;
+      blocked?: string;
+    }>("/tasks/plan", body),
   steer: (id: string, text: string) => post<{ ok: true }>(`/tasks/${id}/steer`, { text }),
   cancelTask: (id: string) => post<{ ok: true }>(`/tasks/${id}/cancel`),
   approve: (id: string, callId: string, approved: boolean) =>

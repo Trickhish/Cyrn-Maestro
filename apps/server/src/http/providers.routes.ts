@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db, schema } from "../db";
 import { encryptSecret } from "../lib/crypto";
 import { adapterFor } from "../providers/gateway";
+import { inferTier } from "../router/weigh";
 import { ProviderError } from "../providers/types";
 import { BadRequest, NotFound, requireActor, activeScope, type Env } from "./context";
 import { assertCan, providerScope } from "../lib/permissions";
@@ -56,6 +57,7 @@ providerRoutes.get("/", async (c) => {
           id: schema.models.id,
           modelId: schema.models.modelId,
           tier: schema.models.tier,
+          tierSource: schema.models.tierSource,
           contextWindow: schema.models.contextWindow,
           enabled: schema.models.enabled,
           /* Surfaced so the UI can grey out a model and say why, rather than
@@ -138,7 +140,10 @@ providerRoutes.post("/:id/refresh", async (c) => {
           id: crypto.randomUUID(),
           providerId: row.id,
           modelId: model.id,
-          tier: "standard",
+          /* First automatic classification, from the model's name. An admin
+             can correct it afterwards, and that correction sticks. */
+          tier: inferTier(model.id),
+          tierSource: "inferred",
           contextWindow: model.contextWindow ?? null,
           priceInPerMTok: model.priceInPerMTok ?? null,
           priceOutPerMTok: model.priceOutPerMTok ?? null,
@@ -167,6 +172,23 @@ providerRoutes.post("/:id/refresh", async (c) => {
             needsReasoningEffort: result.needsReasoningEffort ?? false,
           })
           .where(and(eq(schema.models.providerId, row.id), eq(schema.models.modelId, modelId)));
+      }
+
+      /* Re-run the guess for anything still carrying a guess, so improvements
+         to the classifier reach existing rows. Rows an admin has corrected are
+         left alone — a refresh silently undoing a correction is exactly how a
+         setting stops being trusted. */
+      for (const model of models) {
+        await db
+          .update(schema.models)
+          .set({ tier: inferTier(model.id) })
+          .where(
+            and(
+              eq(schema.models.providerId, row.id),
+              eq(schema.models.modelId, model.id),
+              eq(schema.models.tierSource, "inferred"),
+            ),
+          );
       }
     }
 
@@ -211,6 +233,75 @@ async function mapWithConcurrency<T, R>(
 
   return results;
 }
+
+/* Correcting a model's tier. The automatic guess is a starting point, not a
+   verdict — names carry the signal inconsistently, and whoever pays the bill
+   is better placed than a regular expression to say which models are worth
+   spending on. */
+providerRoutes.patch("/:id/models/:modelId", async (c) => {
+  const actor = requireActor(c);
+  const scope = await providerScope(c.req.param("id"));
+  if (!scope) throw new NotFound();
+  await assertCan(actor, "provider.manage", scope);
+
+  const parsed = z
+    .object({
+      tier: z.enum(["light", "standard", "heavy"]).optional(),
+      enabled: z.boolean().optional(),
+    })
+    .safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) throw new BadRequest("Pick a tier.");
+
+  const updated = await db
+    .update(schema.models)
+    .set({
+      ...(parsed.data.tier ? { tier: parsed.data.tier, tierSource: "manual" as const } : {}),
+      ...(parsed.data.enabled !== undefined ? { enabled: parsed.data.enabled } : {}),
+    })
+    .where(
+      and(
+        eq(schema.models.providerId, c.req.param("id")),
+        eq(schema.models.modelId, decodeURIComponent(c.req.param("modelId"))),
+      ),
+    )
+    .returning({ id: schema.models.id });
+
+  if (updated.length === 0) throw new NotFound();
+
+  await record(scope.ownerOrgId ?? null, actor, "model.tier_changed", c.req.param("modelId"), {
+    tier: parsed.data.tier,
+  });
+
+  return c.json({ ok: true });
+});
+
+/* Puts every model on this connection back to its automatic classification. */
+providerRoutes.post("/:id/models/reclassify", async (c) => {
+  const actor = requireActor(c);
+  const scope = await providerScope(c.req.param("id"));
+  if (!scope) throw new NotFound();
+  await assertCan(actor, "provider.manage", scope);
+
+  const rows = await db
+    .select({ modelId: schema.models.modelId })
+    .from(schema.models)
+    .where(eq(schema.models.providerId, c.req.param("id")));
+
+  for (const row of rows) {
+    await db
+      .update(schema.models)
+      .set({ tier: inferTier(row.modelId), tierSource: "inferred" })
+      .where(
+        and(
+          eq(schema.models.providerId, c.req.param("id")),
+          eq(schema.models.modelId, row.modelId),
+        ),
+      );
+  }
+
+  await record(scope.ownerOrgId ?? null, actor, "model.tiers_reclassified", c.req.param("id"));
+  return c.json({ reclassified: rows.length });
+});
 
 providerRoutes.delete("/:id", async (c) => {
   const actor = requireActor(c);

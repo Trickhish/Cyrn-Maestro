@@ -164,21 +164,59 @@ export function Fleet() {
                   </button>
                 </div>
 
-                {/* A model that failed its probe is shown greyed with the reason,
-                    not hidden — otherwise the user just wonders where it went. */}
-                <div className="flex flex-wrap gap-1.5">
-                  {provider.models.map((model) => (
-                    <span
-                      key={model.id}
-                      title={model.probeError ?? undefined}
-                      className={`font-mono text-[10.5px] border rounded px-1.5 py-0.5 ${
-                        model.probeOk === false
-                          ? "rule text-faint line-through"
-                          : "border-[var(--border-accent)] text-accent-hi"
-                      }`}
-                    >
-                      {model.modelId}
+                {/* Models are classified automatically from their names, then
+                    corrected here. A failed probe is greyed with the reason
+                    rather than hidden — otherwise the user wonders where it
+                    went. */}
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[10px] tracking-[0.12em] uppercase text-faint">
+                      models and tiers
                     </span>
+                    <span className="flex-1" />
+                    <button
+                      type="button"
+                      className="btn btn-chip"
+                      onClick={async () => {
+                        await api.reclassifyModels(provider.id);
+                        await refresh();
+                      }}
+                    >
+                      Reset to automatic
+                    </button>
+                  </div>
+
+                  {provider.models.map((model) => (
+                    <div
+                      key={model.id}
+                      className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-raised"
+                      title={model.probeError ?? undefined}
+                    >
+                      <span
+                        className={`font-mono text-[11px] flex-1 truncate ${
+                          model.probeOk === false ? "text-faint line-through" : "text-secondary"
+                        }`}
+                      >
+                        {model.modelId}
+                      </span>
+
+                      {model.tierSource === "manual" && (
+                        <span className="font-mono text-[9px] text-accent-hi">set by hand</span>
+                      )}
+
+                      <select
+                        value={model.tier}
+                        onChange={async (e) => {
+                          await api.setModelTier(provider.id, model.modelId, e.target.value);
+                          await refresh();
+                        }}
+                        className="bg-surface border rule rounded px-1.5 py-0.5 font-mono text-[10.5px] text-secondary outline-none"
+                      >
+                        <option value="light">light</option>
+                        <option value="standard">standard</option>
+                        <option value="heavy">heavy</option>
+                      </select>
+                    </div>
                   ))}
                 </div>
               </div>

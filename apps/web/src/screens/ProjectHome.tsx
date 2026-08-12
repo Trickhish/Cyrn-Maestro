@@ -9,6 +9,7 @@ import {
   type TaskSummary,
 } from "../lib/api";
 import { Composer } from "../components/Composer";
+import { RoutingChips } from "../components/RoutingChips";
 
 /* The screen you land on: a composer, then what is running, then what ran.
  *
@@ -28,6 +29,7 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [model, setModel] = useState<string>("");
   const [nodeId, setNodeId] = useState<string>("");
+  const [draft, setDraft] = useState("");
   const [error, setError] = useState<string>();
 
   async function refresh() {
@@ -36,14 +38,8 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
     setNodes(n.nodes);
     setProviders(p.providers);
 
-    if (!model) {
-      const usable = p.providers.flatMap((prov) => prov.models.filter((m) => m.probeOk !== false));
-      const preferred =
-        usable.find((m) => m.modelId === project.defaultModelId) ??
-        usable.find((m) => m.modelId.includes("sonnet")) ??
-        usable[0];
-      if (preferred) setModel(preferred.modelId);
-    }
+    /* No preselection: an empty pin means "let the router choose", and the
+       chips show what that resolves to. */
   }
 
   useEffect(() => {
@@ -55,12 +51,6 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
   }, [project.id]);
 
   const online = nodes.filter((n) => n.status === "online");
-  /* Shown in the "auto" option so the choice is visible before dispatch, not
-     explained afterwards. */
-  const leastLoaded = [...online]
-    .filter((n) => n.runningTasks < n.maxConcurrentTasks)
-    .sort((a, b) => a.runningTasks - b.runningTasks)[0];
-  const usableModels = providers.flatMap((p) => p.models.filter((m) => m.probeOk !== false));
   const live = tasks.filter((t) => !["completed", "failed", "cancelled"].includes(t.status));
   const needsYou = live.filter((t) => t.status === "awaiting_approval");
   const recent = tasks.filter((t) => ["completed", "failed", "cancelled"].includes(t.status));
@@ -99,49 +89,21 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
           <Composer
             placeholder="What should the agent do?"
             hints={[]}
-            onSend={(text) => void dispatch(text)}
+            onChange={setDraft}
+            onSend={(text) => {
+              setDraft("");
+              void dispatch(text);
+            }}
           />
 
-          {/* Routing chips: what this task would use, each one changeable. */}
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="flex items-center gap-1.5 border rule rounded-md px-2 py-1 bg-surface">
-              <span className="font-mono text-[10px] tracking-[0.1em] uppercase text-faint">node</span>
-              <select
-                value={nodeId}
-                onChange={(e) => setNodeId(e.target.value)}
-                className="bg-transparent text-[12px] text-secondary outline-none max-w-[200px]"
-              >
-                {/* Empty means "let Maestro pick", which today is the least
-                    loaded machine and in v0.4 becomes the router. */}
-                <option value="">
-                  {online.length ? `auto — ${leastLoaded?.name ?? online[0].name}` : "none online"}
-                </option>
-                {online.map((n) => (
-                  <option key={n.id} value={n.id}>
-                    {n.name} ({n.runningTasks}/{n.maxConcurrentTasks})
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="flex items-center gap-1.5 border rule rounded-md px-2 py-1 bg-surface">
-              <span className="font-mono text-[10px] tracking-[0.1em] uppercase text-faint">model</span>
-              <select
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                className="bg-transparent text-[12px] text-secondary outline-none max-w-[220px]"
-              >
-                {usableModels.length === 0 && <option value="">no models</option>}
-                {usableModels.map((m) => (
-                  <option key={m.id} value={m.modelId}>
-                    {m.modelId}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <Chip label="approvals">writes ask first</Chip>
-          </div>
+          <RoutingChips
+            projectId={project.id}
+            prompt={draft}
+            pinnedNodeId={nodeId || undefined}
+            pinnedModel={model || undefined}
+            onPinNode={(id) => setNodeId(id ?? "")}
+            onPinModel={(m) => setModel(m ?? "")}
+          />
 
           {online.length === 0 && (
             <div className="text-[12.5px] text-warn-hi border border-[var(--border-warn)] bg-raised rounded-lg px-3 py-2">
@@ -195,14 +157,6 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Chip({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <span className="flex items-center gap-1.5 border rule rounded-md px-2 py-1 bg-surface">
-      <span className="font-mono text-[10px] tracking-[0.1em] uppercase text-faint">{label}</span>
-      <span className="text-[12px] text-secondary">{children}</span>
-    </span>
-  );
-}
 
 const dotFor: Record<TaskStatus, string> = {
   queued: "dot dot-idle",

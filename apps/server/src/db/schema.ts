@@ -226,6 +226,13 @@ export const models = sqliteTable(
     tier: text("tier", { enum: ["heavy", "standard", "light"] })
       .notNull()
       .default("standard"),
+    /* Where the tier came from. Refreshing a provider re-classifies models it
+       guessed at, but never overwrites one a human corrected — otherwise every
+       refresh would silently undo the correction, which is the kind of bug
+       that makes people stop trusting the setting. */
+    tierSource: text("tier_source", { enum: ["inferred", "manual"] })
+      .notNull()
+      .default("inferred"),
     contextWindow: integer("context_window"),
     /* USD per million tokens. Null when the provider does not publish a price
        — the UI says "unpriced" rather than quietly showing $0.00. */
