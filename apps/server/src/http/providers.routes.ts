@@ -394,12 +394,30 @@ providerRoutes.patch("/:id/models/:modelId", async (c) => {
 
   if (updated.length === 0) throw new NotFound();
 
-  await record(scope.ownerOrgId ?? null, actor, "model.tier_changed", c.req.param("modelId"), {
-    ...(parsed.data.tier ? { tier: parsed.data.tier } : {}),
-    ...(Object.keys(pricing).length
-      ? { priceIn: parsed.data.priceInPerMTok, priceOut: parsed.data.priceOutPerMTok }
-      : {}),
-  });
+  /* Recorded per field actually present, rather than one call that always
+     says "tier_changed" — a bulk disable pass (turning off every "auto/" or
+     "no-think/" variant a proxy re-publishes, say) would otherwise fill the
+     audit log with entries claiming a tier change that never happened. */
+  const modelId = c.req.param("modelId");
+  if (parsed.data.tier) {
+    await record(scope.ownerOrgId ?? null, actor, "model.tier_changed", modelId, {
+      tier: parsed.data.tier,
+    });
+  }
+  if (Object.keys(pricing).length) {
+    await record(scope.ownerOrgId ?? null, actor, "model.price_changed", modelId, {
+      priceIn: parsed.data.priceInPerMTok,
+      priceOut: parsed.data.priceOutPerMTok,
+    });
+  }
+  if (parsed.data.enabled !== undefined) {
+    await record(
+      scope.ownerOrgId ?? null,
+      actor,
+      parsed.data.enabled ? "model.enabled" : "model.disabled",
+      modelId,
+    );
+  }
 
   return c.json({ ok: true });
 });

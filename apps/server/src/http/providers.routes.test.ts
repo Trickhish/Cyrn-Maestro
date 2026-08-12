@@ -166,3 +166,103 @@ describe("model tiers", () => {
     expect(res.status).toBe(400);
   });
 });
+
+/* A proxy that re-publishes the same model under many routing aliases —
+ * "auto/", "no-think/", vendor-specific renames — can dump hundreds of
+ * variants into one provider's list. Disabling a model here is the one
+ * control that reaches every place the router picks a model, independent
+ * of anything the upstream proxy itself lets you turn off. */
+describe("enabling and disabling a model", () => {
+  const setEnabled = (modelId: string, enabled: boolean) =>
+    app.request(`/api/providers/${providerId}/models/${encodeURIComponent(modelId)}`, {
+      method: "PATCH",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+
+  const enabledOf = async (modelId: string) =>
+    (
+      await db
+        .select({ enabled: schema.models.enabled })
+        .from(schema.models)
+        .where(and(eq(schema.models.providerId, providerId), eq(schema.models.modelId, modelId)))
+        .limit(1)
+    )[0]?.enabled;
+
+  test("starts enabled", async () => {
+    await seedModels([{ id: "auto/claude-sonnet-5" }]);
+    expect(await enabledOf("auto/claude-sonnet-5")).toBe(true);
+  });
+
+  test("can be disabled and re-enabled", async () => {
+    await seedModels([{ id: "auto/claude-sonnet-5" }]);
+
+    expect((await setEnabled("auto/claude-sonnet-5", false)).status).toBe(200);
+    expect(await enabledOf("auto/claude-sonnet-5")).toBe(false);
+
+    expect((await setEnabled("auto/claude-sonnet-5", true)).status).toBe(200);
+    expect(await enabledOf("auto/claude-sonnet-5")).toBe(true);
+  });
+
+  test("does not touch tier or price", async () => {
+    await seedModels([{ id: "claude-sonnet-5", tier: "heavy", source: "manual" }]);
+    await setEnabled("claude-sonnet-5", false);
+
+    const row = await tierOf("claude-sonnet-5");
+    expect(row.tier).toBe("heavy");
+    expect(row.source).toBe("manual");
+  });
+
+  test("a disabled model still appears in the list, marked disabled", async () => {
+    await seedModels([{ id: "no-think/claude-sonnet-5" }]);
+    expect((await setEnabled("no-think/claude-sonnet-5", false)).status).toBe(200);
+
+    const providers = (await body(await app.request("/api/providers", withCookie(cookie)))).providers;
+    const model = providers[0].models.find(
+      (m: { modelId: string }) => m.modelId === "no-think/claude-sonnet-5",
+    );
+    expect(model.enabled).toBe(false);
+  });
+
+  test("is recorded in the audit log under its own action, not tier_changed", async () => {
+    await seedModels([{ id: "claude-sonnet-5" }]);
+    await setEnabled("claude-sonnet-5", false);
+
+    const entries = await db.select().from(schema.auditLog);
+    expect(entries.some((e) => e.action === "model.disabled")).toBe(true);
+    expect(entries.some((e) => e.action === "model.tier_changed")).toBe(false);
+  });
+
+  test("re-enabling is its own distinct action too", async () => {
+    await seedModels([{ id: "claude-sonnet-5" }]);
+    await setEnabled("claude-sonnet-5", false);
+    await setEnabled("claude-sonnet-5", true);
+
+    const entries = await db.select().from(schema.auditLog).where(eq(schema.auditLog.action, "model.enabled"));
+    expect(entries).toHaveLength(1);
+  });
+
+  test("another user cannot disable your models", async () => {
+    await seedModels([{ id: "claude-sonnet-5" }]);
+
+    await db.insert(schema.users).values({
+      id: "stranger2",
+      email: "stranger2@x.com",
+      passwordHash: await Bun.password.hash(PASSWORD, { algorithm: "argon2id" }),
+      instanceRole: "user",
+      status: "active",
+      createdAt: Date.now(),
+    });
+    const strangerCookie = cookieFrom(
+      await app.request("/api/auth/login", json({ email: "stranger2@x.com", password: PASSWORD })),
+    );
+
+    const res = await app.request(`/api/providers/${providerId}/models/claude-sonnet-5`, {
+      method: "PATCH",
+      headers: { cookie: strangerCookie, "content-type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(res.status).toBe(404);
+    expect(await enabledOf("claude-sonnet-5")).toBe(true);
+  });
+});

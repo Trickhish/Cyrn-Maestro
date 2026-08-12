@@ -431,6 +431,11 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(price),
     }),
+  setModelEnabled: (providerId: string, modelId: string, enabled: boolean) =>
+    request<{ ok: true }>(`/providers/${providerId}/models/${encodeURIComponent(modelId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
   reclassifyModels: (providerId: string) =>
     post<{ reclassified: number }>(`/providers/${providerId}/models/reclassify`),
 

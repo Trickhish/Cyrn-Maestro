@@ -50,7 +50,7 @@ export function Connections({
 
   const online = nodes.filter((n) => n.status === "online").length;
   const usableModels = providers.reduce(
-    (n, p) => n + p.models.filter((m) => m.probeOk !== false).length,
+    (n, p) => n + p.models.filter((m) => m.enabled && m.probeOk !== false).length,
     0,
   );
 

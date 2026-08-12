@@ -37,11 +37,11 @@ export function ProvidersPanel({
       )}
 
       {providers.map((provider) => {
-        const usable = provider.models.filter((m) => m.probeOk !== false).length;
+        const usable = provider.models.filter((m) => m.enabled && m.probeOk !== false).length;
         /* Counted because it is the difference between a spend cap that works
            and one that is decorative. */
         const unpriced = provider.models.filter(
-          (m) => m.probeOk !== false && m.priceInPerMTok == null && m.priceOutPerMTok == null,
+          (m) => m.enabled && m.probeOk !== false && m.priceInPerMTok == null && m.priceOutPerMTok == null,
         ).length;
         return (
           <div key={provider.id} className="flex flex-col gap-2 border rule rounded-lg px-3 py-2.5 bg-raised">
@@ -97,6 +97,8 @@ export function ProvidersPanel({
                 </button>
               </div>
 
+              <BulkDisable providerId={provider.id} models={provider.models} onChanged={onChanged} />
+
               {provider.models.map((model) => (
                 <ModelRow
                   key={model.id}
@@ -109,6 +111,61 @@ export function ProvidersPanel({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/* A proxy that re-publishes the same handful of underlying models under many
+ * routing aliases — "auto/", "no-think/", vendor-specific prefixes — can
+ * dump hundreds of variants into one provider's list. Disabling a model here
+ * is respected everywhere the router picks one (index.ts and gateway.ts both
+ * filter on `models.enabled`), independent of anything the upstream proxy
+ * itself lets you turn off — so this works regardless of what that proxy's
+ * own dashboard exposes. Matching by substring rather than a real pattern
+ * language: a prefix typed in plain text is what the case actually calls
+ * for, and a full pattern syntax would be a feature nobody asked for yet. */
+function BulkDisable({
+  providerId,
+  models,
+  onChanged,
+}: {
+  providerId: string;
+  models: ProviderModel[];
+  onChanged: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const q = query.trim().toLowerCase();
+  const matches = q ? models.filter((m) => m.enabled && m.modelId.toLowerCase().includes(q)) : [];
+
+  async function apply() {
+    setBusy(true);
+    try {
+      await Promise.all(matches.map((m) => api.setModelEnabled(providerId, m.modelId, false)));
+      setQuery("");
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2 pb-1">
+      <input
+        className="flex-1 bg-canvas border rule-default rounded-lg px-2.5 py-1.5 text-[12.5px] outline-none focus:border-[var(--border-accent)]"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder='Disable models containing… e.g. "auto/" or "no-think/"'
+      />
+      <button
+        type="button"
+        className="btn btn-chip flex-none"
+        disabled={!matches.length || busy}
+        onClick={apply}
+      >
+        {busy ? "Disabling…" : q ? `Disable ${matches.length}` : "Disable matching"}
+      </button>
     </div>
   );
 }
@@ -148,11 +205,11 @@ function ModelRow({
   }
 
   return (
-    <div className="flex flex-col gap-1 rounded px-1.5 py-1 hover:bg-surface">
+    <div className={`flex flex-col gap-1 rounded px-1.5 py-1 hover:bg-surface ${model.enabled ? "" : "opacity-50"}`}>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span
           className={`font-mono text-[11px] flex-1 min-w-[140px] truncate ${
-            model.probeOk === false ? "text-faint line-through" : "text-secondary"
+            !model.enabled || model.probeOk === false ? "text-faint line-through" : "text-secondary"
           }`}
           title={model.probeError ?? undefined}
         >
@@ -192,6 +249,17 @@ function ModelRow({
           <option value="standard">standard</option>
           <option value="heavy">heavy</option>
         </select>
+
+        <button
+          type="button"
+          className="btn btn-chip"
+          onClick={async () => {
+            await api.setModelEnabled(providerId, model.modelId, !model.enabled);
+            onChanged();
+          }}
+        >
+          {model.enabled ? "Disable" : "Enable"}
+        </button>
       </div>
 
       {editing && <PriceEditor model={model} onSave={savePrice} onCancel={() => setEditing(false)} />}
