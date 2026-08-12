@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError } from "../lib/api";
+import { QrCode } from "../components/QrCode";
 
 /* Account settings.
  *
@@ -234,10 +235,28 @@ function TwoFactorSection({
     return (
       <Section
         title="Two-factor authentication"
-        note="Add this secret to your authenticator app, then enter the code it shows."
+        note="Scan this with your authenticator app, then enter the code it shows."
       >
-        <div className="font-mono text-[13px] text-primary bg-inset border rule rounded-lg px-3 py-2.5 break-all">
-          {setup.secret}
+        <div className="flex flex-wrap items-start gap-4">
+          <QrCode value={setup.uri} />
+
+          <div className="flex min-w-[220px] flex-1 flex-col gap-1.5">
+            <span className="font-mono text-[10px] tracking-[0.12em] uppercase text-faint">
+              or enter this by hand
+            </span>
+            {/* Grouped in fours, because this gets typed on a phone keyboard
+                by anyone whose camera will not focus. */}
+            <div className="font-mono text-[13px] leading-[1.7] text-primary bg-inset border rule rounded-lg px-3 py-2.5 break-all">
+              {setup.secret.match(/.{1,4}/g)?.join(" ")}
+            </div>
+            <button
+              type="button"
+              className="btn btn-sm self-start"
+              onClick={() => void navigator.clipboard?.writeText(setup.secret)}
+            >
+              Copy secret
+            </button>
+          </div>
         </div>
         <form
           className="flex flex-col gap-2"
