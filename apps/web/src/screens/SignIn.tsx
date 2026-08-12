@@ -15,6 +15,12 @@ export function SignIn({ registrationOpen, onSignedIn }: SignInProps) {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [needsCode, setNeedsCode] = useState(false);
+  /* OVH's field the user confirmed autofill works on is type="number", which
+     cannot hold a recovery code (letters and dashes) — the same field cannot
+     be both, so this splits them the way OVH's own page does too: its "no
+     longer have access" link is a visibly separate path, not the same input
+     coerced to take two shapes. */
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
   const [error, setError] = useState<string>();
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [busy, setBusy] = useState(false);
@@ -98,29 +104,52 @@ export function SignIn({ registrationOpen, onSignedIn }: SignInProps) {
             />
           </Field>
 
-          {/* TEMPORARY: unconditionally visible, to test whether the password
-              manager only needed the field to be genuinely on-screen from the
-              start — sr-only (hidden-but-mounted) did not fix it, so this
-              removes hiding as a variable entirely. If this is what makes
-              autofill work, the field needs a real always-there design (e.g.
-              a separate step per OVH) rather than reverting to hidden. */}
-          <Field label="Authenticator code" hint="Only used if this account has two-factor turned on.">
-            <input
-              ref={codeRef}
-              type="text"
-              name="totp"
-              id="totp"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              autoCorrect="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              placeholder="Six digits, or a recovery code"
-              className="w-full bg-surface border rule-default rounded-lg px-3 py-2 text-[13.5px] outline-none focus:border-[var(--border-accent)]"
-            />
+          <Field
+            label="Authenticator code"
+            hint="Only used if this account has two-factor turned on."
+          >
+            {useRecoveryCode ? (
+              <input
+                ref={codeRef}
+                type="text"
+                name="recovery-code"
+                id="recovery-code"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                placeholder="Recovery code"
+                className="w-full bg-surface border rule-default rounded-lg px-3 py-2 text-[13.5px] outline-none focus:border-[var(--border-accent)]"
+              />
+            ) : (
+              /* Matched to OVH's own working field exactly: type, id, name,
+                 and nothing else — no autocomplete, inputmode, or spellcheck
+                 attributes, since the point of this pass is to rule out
+                 whether one of those was itself the thing stopping autofill. */
+              <input
+                ref={codeRef}
+                type="number"
+                name="totp"
+                id="totp"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder="Code"
+                className="w-full bg-surface border rule-default rounded-lg px-3 py-2 text-[13.5px] outline-none focus:border-[var(--border-accent)]"
+              />
+            )}
           </Field>
+
+          <button
+            type="button"
+            className="text-[11.5px] text-tertiary hover:text-secondary text-left -mt-1.5"
+            onClick={() => {
+              setUseRecoveryCode(!useRecoveryCode);
+              setCode("");
+            }}
+          >
+            {useRecoveryCode ? "Use an authenticator code instead" : "Use a recovery code instead"}
+          </button>
 
           {error && (
             <div className="text-[12.5px] text-bad-hi border border-[var(--border-warn)] bg-raised rounded-lg px-3 py-2">
