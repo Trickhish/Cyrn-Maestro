@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, ApiError, type McpServer } from "../../lib/api";
+import { api, ApiError, type GatewayService, type McpServer } from "../../lib/api";
 
 /* MCP servers.
  *
@@ -10,6 +10,7 @@ import { api, ApiError, type McpServer } from "../../lib/api";
 export function McpPanel({ ownerLabel }: { ownerLabel: string }) {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [adding, setAdding] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string>();
 
   async function refresh() {
@@ -27,15 +28,41 @@ export function McpPanel({ ownerLabel }: { ownerLabel: string }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-3">
-        <p className="text-[12.5px] text-tertiary leading-[1.55] flex-1">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <p className="text-[12.5px] text-tertiary leading-[1.55] flex-1 min-w-[220px]">
           External tools an agent can use, over the Model Context Protocol. Available to every
           project owned by {ownerLabel}.
         </p>
-        <button type="button" className="btn btn-sm btn-primary" onClick={() => setAdding(!adding)}>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => {
+            setImporting(!importing);
+            setAdding(false);
+          }}
+        >
+          {importing ? "Cancel" : "Add from a gateway"}
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-primary"
+          onClick={() => {
+            setAdding(!adding);
+            setImporting(false);
+          }}
+        >
           {adding ? "Cancel" : "Connect a server"}
         </button>
       </div>
+
+      {importing && (
+        <ImportGateway
+          onImported={(close) => {
+            if (close) setImporting(false);
+            void refresh();
+          }}
+        />
+      )}
 
       {adding && (
         <AddServer
@@ -204,6 +231,211 @@ function ServerRow({ server, onChanged }: { server: McpServer; onChanged: () => 
         </div>
       )}
     </div>
+  );
+}
+
+/* Importing from a gateway.
+ *
+ * One host, one key, several MCP services. Discovery is a separate step from
+ * import so the key can be tried and the list read before anything is stored —
+ * a gateway you decide against leaves nothing behind. Each service imported
+ * becomes an ordinary server row, so nothing downstream treats it specially. */
+function ImportGateway({ onImported }: { onImported: (close: boolean) => void }) {
+  const [baseUrl, setBaseUrl] = useState("https://mcp.dury.dev");
+  const [token, setToken] = useState("");
+  const [approval, setApproval] = useState("ask");
+  const [services, setServices] = useState<GatewayService[]>();
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [result, setResult] = useState<{ added: string[]; skipped: Array<{ id: string; reason: string }> }>();
+
+  async function discover(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(undefined);
+    setResult(undefined);
+    try {
+      const found = await api.discoverGateway(baseUrl, token);
+      setServices(found.services);
+      /* Everything usable is pre-ticked: importing all of them is the common
+         case, and a service that is not ready would only fail later. */
+      setPicked(
+        new Set(
+          found.services.filter((s) => !s.alreadyAdded && s.connected).map((s) => s.id),
+        ),
+      );
+    } catch (err) {
+      setServices(undefined);
+      setError(err instanceof ApiError ? err.message : "Could not reach that gateway.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submit() {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const outcome = await api.importGateway({
+        baseUrl,
+        token,
+        serviceIds: [...picked],
+        approval,
+      });
+      setResult(outcome);
+      /* The form stays open when anything was skipped, because the reason is
+         the only place that says why — closing it would take the answer away
+         at the moment it is needed. */
+      onImported(outcome.skipped.length === 0);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not import them.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="flex flex-col gap-2 border rule rounded-lg px-3 py-3 bg-surface" onSubmit={discover}>
+      <p className="text-[12.5px] text-tertiary leading-[1.55]">
+        A gateway hosts several MCP services behind one key. Each one you pick is connected
+        separately, so you can enable, disable and scope them independently afterwards.
+      </p>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <Field label="Gateway URL">
+          <input
+            className={inputClass}
+            value={baseUrl}
+            onChange={(e) => {
+              setBaseUrl(e.target.value);
+              setServices(undefined);
+            }}
+            placeholder="https://mcp.dury.dev"
+            required
+          />
+        </Field>
+        <Field label="API key" hint="Encrypted at rest. It is never shown again.">
+          <input
+            className={inputClass}
+            type="password"
+            value={token}
+            onChange={(e) => {
+              setToken(e.target.value);
+              setServices(undefined);
+            }}
+            autoComplete="off"
+            placeholder="imcp_…"
+            required
+          />
+        </Field>
+      </div>
+
+      {!services && (
+        <button type="submit" className="btn btn-primary self-start" disabled={busy}>
+          {busy ? "Asking the gateway…" : "See what it hosts"}
+        </button>
+      )}
+
+      {error && <div className="text-[12.5px] text-bad-hi">{error}</div>}
+
+      {services && services.length === 0 && (
+        <div className="text-[12.5px] text-warn-hi">
+          That key reaches no services. Check its scope on the gateway.
+        </div>
+      )}
+
+      {services && services.length > 0 && (
+        <>
+          <div className="flex flex-col gap-0.5">
+            {services.map((service) => {
+              const usable = !service.alreadyAdded;
+              return (
+                <label
+                  key={service.id}
+                  className={`flex items-start gap-2 rounded px-1.5 py-1 ${
+                    usable ? "hover:bg-raised cursor-pointer" : "opacity-55"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-[3px]"
+                    disabled={!usable}
+                    checked={picked.has(service.id)}
+                    onChange={() => {
+                      const next = new Set(picked);
+                      if (next.has(service.id)) next.delete(service.id);
+                      else next.add(service.id);
+                      setPicked(next);
+                    }}
+                  />
+                  <span className="flex flex-col gap-0.5 min-w-0">
+                    <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span className="font-mono text-[11px] text-secondary">{service.id}</span>
+                      <span className="text-[12px] text-tertiary">{service.name}</span>
+                      {service.alreadyAdded && (
+                        <span className="font-mono text-[9.5px] text-faint">already connected</span>
+                      )}
+                      {!service.connected && (
+                        <span className="font-mono text-[9.5px] text-warn-hi">
+                          needs an account linked at the gateway
+                        </span>
+                      )}
+                    </span>
+                    {service.description && (
+                      <span className="text-[11.5px] text-faint leading-snug">
+                        {service.description}
+                      </span>
+                    )}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+
+          <Field label="Approval" hint="Applies to every service imported now. Change it per server afterwards.">
+            <select
+              className={inputClass}
+              value={approval}
+              onChange={(e) => setApproval(e.target.value)}
+            >
+              <option value="ask">Ask before every call</option>
+              <option value="auto">Run without asking</option>
+              <option value="never">Never run</option>
+            </select>
+          </Field>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy || picked.size === 0}
+              onClick={() => void submit()}
+            >
+              {busy
+                ? "Connecting…"
+                : `Connect ${picked.size} service${picked.size === 1 ? "" : "s"}`}
+            </button>
+            <button type="submit" className="btn" disabled={busy}>
+              Re-check
+            </button>
+          </div>
+        </>
+      )}
+
+      {result && (
+        <div className="flex flex-col gap-1 text-[12px]">
+          {result.added.length > 0 && (
+            <div className="text-add-hi">Connected {result.added.join(", ")}.</div>
+          )}
+          {result.skipped.map((s) => (
+            <div key={s.id} className="text-warn-hi">
+              {s.id}: {s.reason}
+            </div>
+          ))}
+        </div>
+      )}
+    </form>
   );
 }
 

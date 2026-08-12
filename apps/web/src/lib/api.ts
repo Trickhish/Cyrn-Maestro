@@ -188,8 +188,30 @@ export interface McpServer {
   lastConnectedAt: number | null;
 }
 
+export interface GatewayService {
+  id: string;
+  name: string;
+  description: string;
+  url: string;
+  requiresAccount: boolean;
+  connected: boolean;
+  alreadyAdded: boolean;
+}
+
 export const api = {
   mcpServers: () => request<{ servers: McpServer[] }>("/mcp"),
+  discoverGateway: (baseUrl: string, token: string) =>
+    post<{ base: string; services: GatewayService[] }>("/mcp/gateway/discover", { baseUrl, token }),
+  importGateway: (body: {
+    baseUrl: string;
+    token: string;
+    serviceIds: string[];
+    approval: string;
+  }) =>
+    post<{ added: string[]; skipped: Array<{ id: string; reason: string }> }>(
+      "/mcp/gateway/import",
+      body,
+    ),
   addMcpServer: (body: Record<string, unknown>) => post<{ server: McpServer }>("/mcp", body),
   mcpTools: (id: string) =>
     post<{ tools: Array<{ name: string; description: string }>; note?: string }>(`/mcp/${id}/tools`),
