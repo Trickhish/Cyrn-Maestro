@@ -62,7 +62,7 @@ beforeEach(async () => {
 });
 
 async function enrolled() {
-  const token = await createEnrollmentToken(OWNER, null);
+  const token = await createEnrollmentToken({ ownerUserId: OWNER }, null);
   const socket = fakeSocket();
   const session: SocketSession = {};
   await handleNodeMessage(
@@ -87,7 +87,7 @@ describe("enrollment", () => {
   /* The property that makes a curl|sh install command safe to leave in shell
      history: the token is worthless the moment it has been used. */
   test("an enrollment token cannot be used twice", async () => {
-    const token = await createEnrollmentToken(OWNER, null);
+    const token = await createEnrollmentToken({ ownerUserId: OWNER }, null);
 
     const first = fakeSocket();
     await handleNodeMessage({}, first, JSON.stringify({ type: "node.enroll", id: newId(), enrollmentToken: token, node: identity }));
@@ -101,7 +101,7 @@ describe("enrollment", () => {
   });
 
   test("an expired token is refused", async () => {
-    const token = await createEnrollmentToken(OWNER, null);
+    const token = await createEnrollmentToken({ ownerUserId: OWNER }, null);
     await db
       .update(schema.enrollmentTokens)
       .set({ expiresAt: Date.now() - 1000 })
@@ -138,7 +138,7 @@ describe("registration", () => {
     await handleNodeMessage(session, reconnect, JSON.stringify({ type: "node.register", id: newId(), nodeToken, node: identity, runningTaskIds: [] }));
 
     expect(reconnect.ofType("node.registered")).toBeDefined();
-    expect(onlineNodes(OWNER)).toHaveLength(1);
+    expect(onlineNodes({ ownerUserId: OWNER })).toHaveLength(1);
   });
 
   test("a forged node token is refused", async () => {
@@ -157,7 +157,7 @@ describe("registration", () => {
     const second = fakeSocket();
     await handleNodeMessage({}, second, JSON.stringify({ type: "node.register", id: newId(), nodeToken, node: identity, runningTaskIds: [] }));
 
-    expect(onlineNodes(OWNER)).toHaveLength(1);
+    expect(onlineNodes({ ownerUserId: OWNER })).toHaveLength(1);
     expect(socket.closed).toBe(true);
   });
 
@@ -168,7 +168,7 @@ describe("registration", () => {
     const second = fakeSocket();
     await handleNodeMessage({}, second, JSON.stringify({ type: "node.register", id: newId(), nodeToken, node: identity, runningTaskIds: ["task-1"] }));
 
-    expect([...onlineNodes(OWNER)[0].reported]).toEqual(["task-1"]);
+    expect([...onlineNodes({ ownerUserId: OWNER })[0].reported]).toEqual(["task-1"]);
   });
 });
 
@@ -291,7 +291,7 @@ describe("routing replies back to the waiting loop", () => {
 describe("capacity accounting", () => {
   test("an assignment counts immediately, before any heartbeat", async () => {
     const { session } = await enrolled();
-    const node = onlineNodes(OWNER)[0];
+    const node = onlineNodes({ ownerUserId: OWNER })[0];
 
     expect(loadOf(node)).toBe(0);
     noteAssigned(session.nodeId!, "t1");
@@ -302,7 +302,7 @@ describe("capacity accounting", () => {
 
   test("releasing frees the slot immediately", async () => {
     const { session } = await enrolled();
-    const node = onlineNodes(OWNER)[0];
+    const node = onlineNodes({ ownerUserId: OWNER })[0];
 
     noteAssigned(session.nodeId!, "t1");
     noteReleased(session.nodeId!, "t1");
@@ -313,7 +313,7 @@ describe("capacity accounting", () => {
      finished, but it must never wipe an assignment made since it was sent. */
   test("a heartbeat does not erase an assignment made after it", async () => {
     const { session } = await enrolled();
-    const node = onlineNodes(OWNER)[0];
+    const node = onlineNodes({ ownerUserId: OWNER })[0];
 
     noteAssigned(session.nodeId!, "t-old");
     noteAssigned(session.nodeId!, "t-new");
@@ -330,7 +330,7 @@ describe("capacity accounting", () => {
 
   test("a heartbeat drops a task the node has finished", async () => {
     const { session } = await enrolled();
-    const node = onlineNodes(OWNER)[0];
+    const node = onlineNodes({ ownerUserId: OWNER })[0];
 
     noteAssigned(session.nodeId!, "t-done");
     noteAssigned(session.nodeId!, "t-live");
@@ -349,18 +349,18 @@ describe("capacity accounting", () => {
 describe("revocation and disconnect", () => {
   test("revoking drops the live socket immediately", async () => {
     const { socket, session } = await enrolled();
-    expect(onlineNodes(OWNER)).toHaveLength(1);
+    expect(onlineNodes({ ownerUserId: OWNER })).toHaveLength(1);
 
-    const ok = await revokeNode(session.nodeId!, OWNER);
+    const ok = await revokeNode(session.nodeId!, { ownerUserId: OWNER });
     expect(ok).toBe(true);
     expect(socket.closed).toBe(true);
-    expect(onlineNodes(OWNER)).toHaveLength(0);
+    expect(onlineNodes({ ownerUserId: OWNER })).toHaveLength(0);
   });
 
   test("a revoked node cannot register again", async () => {
     const { socket, session } = await enrolled();
     const nodeToken = socket.ofType("node.enrolled").nodeToken;
-    await revokeNode(session.nodeId!, OWNER);
+    await revokeNode(session.nodeId!, { ownerUserId: OWNER });
 
     const retry = fakeSocket();
     await handleNodeMessage({}, retry, JSON.stringify({ type: "node.register", id: newId(), nodeToken, node: identity, runningTaskIds: [] }));
@@ -369,14 +369,14 @@ describe("revocation and disconnect", () => {
 
   test("another user cannot revoke your node", async () => {
     const { session } = await enrolled();
-    expect(await revokeNode(session.nodeId!, "someone-else")).toBe(false);
+    expect(await revokeNode(session.nodeId!, { ownerUserId: "someone-else" })).toBe(false);
   });
 
   test("disconnecting marks the node offline", async () => {
     const { session } = await enrolled();
     await handleDisconnect(session);
 
-    expect(onlineNodes(OWNER)).toHaveLength(0);
+    expect(onlineNodes({ ownerUserId: OWNER })).toHaveLength(0);
     const [row] = await db.select().from(schema.nodes).limit(1);
     expect(row.status).toBe("offline");
   });

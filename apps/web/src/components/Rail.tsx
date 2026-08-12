@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { api, type Actor, type Project, type TaskSummary } from "../lib/api";
+import { api, type Actor, type Organization, type Project, type TaskSummary } from "../lib/api";
+import { OrgSwitcher } from "./OrgSwitcher";
 import { ConductorIcon, InboxIcon, FleetIcon, SettingsIcon, ThemeIcon } from "./icons";
 
 /* The rail carries navigation, not counts.
@@ -15,6 +16,8 @@ export type View =
 
 interface RailProps {
   actor: Actor;
+  organizations: Organization[];
+  activeOrgId: string | null;
   projects: Project[];
   tasks: TaskSummary[];
   view: View;
@@ -26,6 +29,8 @@ interface RailProps {
 
 export function Rail({
   actor,
+  organizations,
+  activeOrgId,
   projects,
   tasks,
   view,
@@ -59,10 +64,16 @@ export function Rail({
       aria-label="Primary"
       className="w-[216px] flex-none bg-canvas-alt border-r rule flex flex-col py-3.5"
     >
-      <div className="flex items-center gap-[9px] px-3.5 pb-4">
+      <div className="flex items-center gap-[9px] px-3.5 pb-3">
         <img src="/logo-mark-arcs.svg" alt="" width={22} height={22} className="block" />
         <span className="font-display text-[14px] font-semibold tracking-[-0.01em]">maestro</span>
       </div>
+
+      <OrgSwitcher
+        organizations={organizations}
+        activeOrgId={activeOrgId}
+        personalLabel={actor.email.split("@")[0]}
+      />
 
       <div className="flex flex-col gap-px px-2">
         <button

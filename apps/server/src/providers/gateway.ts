@@ -41,28 +41,31 @@ export async function resolveProvider(
   owner: { ownerUserId?: string | null; ownerOrgId?: string | null },
   preferredModel?: string | null,
 ): Promise<ResolvedProvider> {
-  if (owner.ownerOrgId) {
-    throw new NoProviderError(
-      "Organization-owned projects are not available yet. Move this project to a personal owner.",
-    );
-  }
-  if (!owner.ownerUserId) {
+  if (!owner.ownerOrgId && !owner.ownerUserId) {
     throw new NoProviderError("This project has no owner, so there are no credentials to use.");
   }
 
+  /* The owner's connections and nobody else's. An org project never reaches
+     for the member's personal key, and a personal project never reaches for an
+     org's — in either direction that would misattribute the cost and push the
+     work through an account whoever owns it does not control. */
   const connections = await db
     .select()
     .from(schema.providerConnections)
     .where(
       and(
-        eq(schema.providerConnections.ownerUserId, owner.ownerUserId),
+        owner.ownerOrgId
+          ? eq(schema.providerConnections.ownerOrgId, owner.ownerOrgId)
+          : eq(schema.providerConnections.ownerUserId, owner.ownerUserId!),
         eq(schema.providerConnections.enabled, true),
       ),
     );
 
   if (connections.length === 0) {
     throw new NoProviderError(
-      "No provider is connected for this project's owner. Add one in Settings → Providers.",
+      owner.ownerOrgId
+        ? "This organization has no provider connected, so its tasks cannot run. An organization admin can add one in Organization → Providers."
+        : "No provider is connected for this project's owner. Add one in Settings → Providers.",
     );
   }
 

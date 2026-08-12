@@ -16,6 +16,7 @@ export interface LiveNode {
   nodeId: string;
   name: string;
   ownerUserId: string | null;
+  ownerOrgId: string | null;
   socket: { send(data: string): void; close(): void };
   /* Two views of the same thing, deliberately kept apart.
    *
@@ -54,8 +55,14 @@ type ResultHandler = (message: NodeMessage) => void;
 const waiting = new Map<string, ResultHandler>();
 const taskSubscribers = new Map<string, Set<ResultHandler>>();
 
-export function onlineNodes(ownerUserId: string): LiveNode[] {
-  return [...live.values()].filter((n) => n.ownerUserId === ownerUserId);
+/* Node ownership mirrors project ownership. An org's node hosts only that
+   org's projects, and a personal node only its owner's — so an organization's
+   source is never checked out onto a machine the organization does not
+   control, and a member's laptop never silently becomes org infrastructure. */
+export function onlineNodes(owner: { ownerUserId?: string | null; ownerOrgId?: string | null }): LiveNode[] {
+  return [...live.values()].filter((n) =>
+    owner.ownerOrgId ? n.ownerOrgId === owner.ownerOrgId : n.ownerUserId === owner.ownerUserId,
+  );
 }
 
 export function getLiveNode(nodeId: string): LiveNode | undefined {
@@ -240,6 +247,7 @@ async function enroll(
     nodeId,
     name: identity.name,
     ownerUserId: row.ownerUserId,
+    ownerOrgId: row.ownerOrgId,
     socket,
     assigned: new Set(),
     reported: new Set(),
@@ -292,6 +300,7 @@ async function register(
     nodeId: row.id,
     name: identity.name,
     ownerUserId: row.ownerUserId,
+    ownerOrgId: row.ownerOrgId,
     socket,
     /* A reconnecting node still believes it is running these; trust it until
        reconciliation says otherwise, so its slots are not double-booked. */
@@ -343,14 +352,14 @@ export async function handleDisconnect(session: SocketSession): Promise<void> {
 }
 
 export async function createEnrollmentToken(
-  ownerUserId: string,
+  owner: { ownerUserId?: string | null; ownerOrgId?: string | null },
   projectId: string | null,
 ): Promise<string> {
   const token = `nk_${newToken(18)}`;
   await db.insert(schema.enrollmentTokens).values({
     id: crypto.randomUUID(),
-    ownerUserId,
-    ownerOrgId: null,
+    ownerUserId: owner.ownerOrgId ? null : (owner.ownerUserId ?? null),
+    ownerOrgId: owner.ownerOrgId ?? null,
     projectId,
     tokenHash: hashToken(token),
     expiresAt: Date.now() + config.enrollmentTtlMs,
@@ -360,11 +369,21 @@ export async function createEnrollmentToken(
   return token;
 }
 
-export async function revokeNode(nodeId: string, ownerUserId: string): Promise<boolean> {
+export async function revokeNode(
+  nodeId: string,
+  owner: { ownerUserId?: string | null; ownerOrgId?: string | null },
+): Promise<boolean> {
   const updated = await db
     .update(schema.nodes)
     .set({ status: "revoked" })
-    .where(and(eq(schema.nodes.id, nodeId), eq(schema.nodes.ownerUserId, ownerUserId)))
+    .where(
+      and(
+        eq(schema.nodes.id, nodeId),
+        owner.ownerOrgId
+          ? eq(schema.nodes.ownerOrgId, owner.ownerOrgId)
+          : eq(schema.nodes.ownerUserId, owner.ownerUserId!),
+      ),
+    )
     .returning({ id: schema.nodes.id });
 
   if (updated.length === 0) return false;

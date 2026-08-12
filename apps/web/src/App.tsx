@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type Actor, type Project, type TaskSummary } from "./lib/api";
+import { api, getActiveOrg, type Actor, type Organization, type Project, type TaskSummary } from "./lib/api";
 import { useTheme } from "./lib/useTheme";
 import { hashFor, viewFromHash } from "./lib/route";
 import { Rail, type View } from "./components/Rail";
@@ -15,6 +15,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [view, setViewState] = useState<View>(() => viewFromHash(location.hash) ?? { name: "fleet" });
   const [theme, toggleTheme] = useTheme();
 
@@ -46,9 +47,10 @@ export default function App() {
   }, []);
 
   const refresh = useCallback(async () => {
-    const [p, t] = await Promise.all([api.projects(), api.tasks()]);
+    const [p, t, o] = await Promise.all([api.projects(), api.tasks(), api.orgs()]);
     setProjects(p.projects);
     setTasks(t.tasks);
+    setOrganizations(o.organizations);
     return p.projects;
   }, []);
 
@@ -88,6 +90,8 @@ export default function App() {
     <div className="h-full flex bg-canvas text-primary">
       <Rail
         actor={actor}
+        organizations={organizations}
+        activeOrgId={getActiveOrg()}
         projects={projects}
         tasks={tasks}
         view={view}

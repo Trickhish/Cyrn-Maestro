@@ -15,6 +15,21 @@ export class ApiError extends Error {
   }
 }
 
+/* The organization the user is currently working in, or null for personal.
+   Sent on every request; the server verifies membership rather than trusting
+   it, so this is a convenience, not a permission. */
+let activeOrgId: string | null = localStorage.getItem("maestro.org");
+
+export function setActiveOrg(orgId: string | null): void {
+  activeOrgId = orgId;
+  if (orgId) localStorage.setItem("maestro.org", orgId);
+  else localStorage.removeItem("maestro.org");
+}
+
+export function getActiveOrg(): string | null {
+  return activeOrgId;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
@@ -22,6 +37,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     credentials: "same-origin",
     headers: {
       ...(init.body ? { "content-type": "application/json" } : {}),
+      ...(activeOrgId ? { "x-maestro-org": activeOrgId } : {}),
       ...init.headers,
     },
   });
@@ -126,7 +142,31 @@ export interface Provider {
 
 /* ------------------------------------------------------------------- calls */
 
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  role: "owner" | "admin" | "member" | "viewer";
+  permissions: string[];
+}
+
 export const api = {
+  orgs: () => request<{ organizations: Organization[] }>("/orgs"),
+  createOrg: (name: string) => post<{ organization: Organization }>("/orgs", { name }),
+  members: (orgId: string) =>
+    request<{
+      members: Array<{ userId: string; email: string; role: string; since: number }>;
+      invitations: Array<{ id: string; email: string; role: string; expiresAt: number }>;
+    }>(`/orgs/${orgId}/members`),
+  invite: (orgId: string, email: string, role: string) =>
+    post<{ link: string }>(`/orgs/${orgId}/invitations`, { email, role }),
+  acceptInvite: (token: string) =>
+    post<{ organization: Organization }>("/orgs/invitations/accept", { token }),
+  audit: (orgId: string) =>
+    request<{ entries: Array<{ id: string; action: string; actorEmail: string | null; target: string | null; at: number }> }>(
+      `/orgs/${orgId}/audit`,
+    ),
+
   session: () => request<{ actor: Actor | null; registrationOpen: boolean }>("/auth/session"),
   register: (email: string, password: string) => post<{ actor: Actor }>("/auth/register", { email, password }),
   login: (email: string, password: string) => post<{ actor: Actor }>("/auth/login", { email, password }),

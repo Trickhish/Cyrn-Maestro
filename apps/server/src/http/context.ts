@@ -1,17 +1,37 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
 import { actorForToken, SESSION_COOKIE, type Actor } from "../lib/auth";
-import { Forbidden } from "../lib/permissions";
+import { Forbidden, roleIn } from "../lib/permissions";
 
-export type Env = { Variables: { actor: Actor | null } };
+export type Env = { Variables: { actor: Actor | null; orgId: string | null } };
 
 /* Resolves the session on every request. Attaching the actor here rather than
    per-route means a route can never forget to look, only forget to check —
    and requireActor makes forgetting to check a 401 rather than a silent pass. */
 export const withActor: MiddlewareHandler<Env> = async (c, next) => {
-  c.set("actor", await actorForToken(getCookie(c, SESSION_COOKIE)));
+  const actor = await actorForToken(getCookie(c, SESSION_COOKIE));
+  c.set("actor", actor);
+
+  /* The active organization, sent by the client's org switcher.
+   *
+   * Verified against membership here rather than trusted, so a forged header
+   * buys nothing: an org the actor does not belong to resolves to null and the
+   * request proceeds in their personal scope, where they can only reach their
+   * own things anyway. */
+  const requested = c.req.header("x-maestro-org")?.trim() || null;
+  c.set("orgId", actor && requested && (await roleIn(actor.id, requested)) ? requested : null);
+
   await next();
 };
+
+/* The scope a request is acting in: an organization when one is active and the
+   actor is a member of it, otherwise the actor themselves. */
+export function activeScope(c: Context<Env>): { ownerUserId: string | null; ownerOrgId: string | null } {
+  const orgId = c.get("orgId");
+  if (orgId) return { ownerUserId: null, ownerOrgId: orgId };
+  const actor = c.get("actor");
+  return { ownerUserId: actor?.id ?? null, ownerOrgId: null };
+}
 
 export function requireActor(c: Context<Env>): Actor {
   const actor = c.get("actor");

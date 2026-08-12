@@ -68,7 +68,9 @@ taskRoutes.post("/", async (c) => {
   /* Manual dispatch in v0.1: the router lands in v0.4. Until then, honour the
      named node, or pick the least loaded online one so two tasks dispatched
      back to back do not pile onto the same machine while another sits idle. */
-  const available = onlineNodes(actor.id);
+    /* Nodes belonging to whoever owns the PROJECT, not to whoever pressed the
+     button. A member's personal laptop is not org capacity. */
+  const available = onlineNodes(scope);
 
   if (available.length === 0) {
     throw new BadRequest("No node is online. Install one from Fleet → Add node, then try again.");

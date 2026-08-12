@@ -3,7 +3,8 @@ import { eq, desc } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db";
 import { assertCan, projectScope } from "../lib/permissions";
-import { BadRequest, NotFound, requireActor, type Env } from "./context";
+import { record } from "../lib/audit";
+import { BadRequest, NotFound, requireActor, activeScope, type Env } from "./context";
 
 export const projectRoutes = new Hono<Env>();
 
@@ -27,10 +28,15 @@ function slugify(name: string): string {
 
 projectRoutes.get("/", async (c) => {
   const actor = requireActor(c);
+  const scope = activeScope(c);
   const rows = await db
     .select()
     .from(schema.projects)
-    .where(eq(schema.projects.ownerUserId, actor.id))
+    .where(
+      scope.ownerOrgId
+        ? eq(schema.projects.ownerOrgId, scope.ownerOrgId)
+        : eq(schema.projects.ownerUserId, actor.id),
+    )
     .orderBy(desc(schema.projects.createdAt));
   return c.json({ projects: rows });
 });
@@ -44,13 +50,20 @@ projectRoutes.post("/", async (c) => {
 
   /* Slugs are unique per owner, so a second "API" gets a suffix rather than a
      constraint violation the user has to interpret. */
+  const scope = activeScope(c);
+  await assertCan(actor, "project.create", scope);
+
   const base = slugify(parsed.data.name);
   const taken = new Set(
     (
       await db
         .select({ slug: schema.projects.slug })
         .from(schema.projects)
-        .where(eq(schema.projects.ownerUserId, actor.id))
+        .where(
+          scope.ownerOrgId
+            ? eq(schema.projects.ownerOrgId, scope.ownerOrgId)
+            : eq(schema.projects.ownerUserId, actor.id),
+        )
     ).map((r) => r.slug),
   );
 
@@ -59,8 +72,8 @@ projectRoutes.post("/", async (c) => {
 
   const row = {
     id: crypto.randomUUID(),
-    ownerUserId: actor.id,
-    ownerOrgId: null,
+    ownerUserId: scope.ownerOrgId ? null : actor.id,
+    ownerOrgId: scope.ownerOrgId,
     name: parsed.data.name,
     slug,
     repoUrl: parsed.data.repoUrl ?? null,
@@ -72,6 +85,7 @@ projectRoutes.post("/", async (c) => {
   };
 
   await db.insert(schema.projects).values(row);
+  await record(scope.ownerOrgId, actor, "project.created", row.id, { name: row.name });
   return c.json({ project: row }, 201);
 });
 
@@ -113,5 +127,6 @@ projectRoutes.delete("/:id", async (c) => {
   await assertCan(actor, "project.delete", scope);
 
   await db.delete(schema.projects).where(eq(schema.projects.id, c.req.param("id")));
+  await record(scope.ownerOrgId ?? null, actor, "project.deleted", c.req.param("id"));
   return c.json({ ok: true });
 });

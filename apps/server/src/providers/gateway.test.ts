@@ -9,12 +9,45 @@ beforeAll(resetDatabase);
 
 const ALICE = "alice-id";
 const BOB = "bob-id";
+const ORG = "org-acme";
 
 async function seedUsers() {
   await db.insert(schema.users).values([
     { id: ALICE, email: "alice@x.com", passwordHash: "x", instanceRole: "user", status: "active", createdAt: Date.now() },
     { id: BOB, email: "bob@x.com", passwordHash: "x", instanceRole: "user", status: "active", createdAt: Date.now() },
   ]);
+}
+
+async function seedOrg() {
+  await db.insert(schema.organizations).values({
+    id: ORG, name: "Acme", slug: "acme", require2fa: false, createdAt: Date.now(),
+  });
+}
+
+/* A connection owned by the organization itself, not by any member. */
+async function giveOrgProvider(modelIds: string[]) {
+  const providerId = crypto.randomUUID();
+  await db.insert(schema.providerConnections).values({
+    id: providerId,
+    ownerUserId: null,
+    ownerOrgId: ORG,
+    name: "org-provider",
+    kind: "openai_compatible",
+    baseUrl: "https://provider.test/v1",
+    encryptedKey: encryptSecret("org-key"),
+    enabled: true,
+    lastHealthAt: null,
+    lastHealthOk: null,
+    createdAt: Date.now(),
+  });
+  for (const modelId of modelIds) {
+    await db.insert(schema.models).values({
+      id: crypto.randomUUID(), providerId, modelId, tier: "standard",
+      contextWindow: 200_000, priceInPerMTok: 3, priceOutPerMTok: 15, enabled: true,
+      needsReasoningEffort: false,
+    });
+  }
+  return providerId;
 }
 
 async function giveProvider(userId: string, modelIds: string[], enabled = true) {
@@ -50,6 +83,7 @@ async function giveProvider(userId: string, modelIds: string[], enabled = true) 
 beforeEach(async () => {
   resetDatabase();
   await seedUsers();
+  await seedOrg();
 });
 
 describe("whose credentials a task uses", () => {
@@ -78,11 +112,33 @@ describe("whose credentials a task uses", () => {
     await expect(resolveProvider({ ownerUserId: ALICE })).rejects.toBeInstanceOf(NoProviderError);
   });
 
-  test("org-owned projects fail closed until tenancy ships", async () => {
+  /* The rule in the other direction, and the one that costs real money if it
+     is wrong: an org project must never quietly spend a member's personal
+     credit, even when that member has a perfectly good key attached. */
+  test("an org project never falls back to a member's personal connection", async () => {
     await giveProvider(ALICE, ["model-a"]);
-    await expect(
-      resolveProvider({ ownerUserId: ALICE, ownerOrgId: "acme" }),
-    ).rejects.toThrow(/not available yet/);
+    await expect(resolveProvider({ ownerOrgId: ORG })).rejects.toThrow(
+      /organization has no provider/,
+    );
+  });
+
+  test("an org project uses the org's own connection", async () => {
+    await giveOrgProvider(["org-model"]);
+    const resolved = await resolveProvider({ ownerOrgId: ORG });
+    expect(resolved.model).toBe("org-model");
+  });
+
+  test("a personal project never reaches for an org connection", async () => {
+    await giveOrgProvider(["org-model"]);
+    await expect(resolveProvider({ ownerUserId: ALICE })).rejects.toThrow(
+      /No provider is connected/,
+    );
+  });
+
+  /* The error has to say what to do about it. "No provider" with no next step
+     is how a member ends up filing a bug against the wrong thing. */
+  test("the org error points at who can fix it", async () => {
+    await expect(resolveProvider({ ownerOrgId: ORG })).rejects.toThrow(/organization admin/);
   });
 
   test("an unowned project has no credentials", async () => {

@@ -4,13 +4,22 @@ import { z } from "zod";
 import { db, schema } from "../db";
 import { config } from "../config";
 import { createEnrollmentToken, revokeNode, getLiveNode } from "../nodes/registry";
-import { BadRequest, NotFound, requireActor, type Env } from "./context";
+import { assertCan, nodeScope, projectScope } from "../lib/permissions";
+import { BadRequest, NotFound, requireActor, activeScope, type Env } from "./context";
 
 export const nodeRoutes = new Hono<Env>();
 
 nodeRoutes.get("/", async (c) => {
   const actor = requireActor(c);
-  const rows = await db.select().from(schema.nodes).where(eq(schema.nodes.ownerUserId, actor.id));
+  const scope = activeScope(c);
+  const rows = await db
+    .select()
+    .from(schema.nodes)
+    .where(
+      scope.ownerOrgId
+        ? eq(schema.nodes.ownerOrgId, scope.ownerOrgId)
+        : eq(schema.nodes.ownerUserId, actor.id),
+    );
 
   return c.json({
     nodes: rows.map((row) => {
@@ -47,16 +56,18 @@ nodeRoutes.post("/enroll", async (c) => {
   const parsed = CreateEnrollment.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) throw new BadRequest("Check the request.");
 
+  const scope = activeScope(c);
+  /* Enrolling a node into an org is an administrative act, not something any
+     member can do — a node runs arbitrary commands on a real machine. */
+  await assertCan(actor, "node.enroll", scope);
+
   if (parsed.data.projectId) {
-    const [project] = await db
-      .select({ ownerUserId: schema.projects.ownerUserId })
-      .from(schema.projects)
-      .where(eq(schema.projects.id, parsed.data.projectId))
-      .limit(1);
-    if (!project || project.ownerUserId !== actor.id) throw new NotFound();
+    const projScope = await projectScope(parsed.data.projectId);
+    if (!projScope) throw new NotFound();
+    await assertCan(actor, "node.enroll", projScope);
   }
 
-  const token = await createEnrollmentToken(actor.id, parsed.data.projectId ?? null);
+  const token = await createEnrollmentToken(scope, parsed.data.projectId ?? null);
 
   return c.json({
     token,
@@ -67,6 +78,10 @@ nodeRoutes.post("/enroll", async (c) => {
 
 nodeRoutes.delete("/:id", async (c) => {
   const actor = requireActor(c);
-  if (!(await revokeNode(c.req.param("id"), actor.id))) throw new NotFound();
+  const scope = await nodeScope(c.req.param("id"));
+  if (!scope) throw new NotFound();
+  await assertCan(actor, "node.revoke", scope);
+
+  if (!(await revokeNode(c.req.param("id"), scope))) throw new NotFound();
   return c.json({ ok: true });
 });

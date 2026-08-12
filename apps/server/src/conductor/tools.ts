@@ -138,7 +138,7 @@ async function fleetStatus(actor: Actor): Promise<string> {
   const rows = await db.select().from(schema.nodes).where(eq(schema.nodes.ownerUserId, actor.id));
   if (rows.length === 0) return "No machines are enrolled.";
 
-  const live = onlineNodes(actor.id);
+  const live = onlineNodes({ ownerUserId: actor.id });
 
   const lines = rows.map((node) => {
     const connected = getLiveNode(node.id);

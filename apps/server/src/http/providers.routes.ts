@@ -5,7 +5,9 @@ import { db, schema } from "../db";
 import { encryptSecret } from "../lib/crypto";
 import { adapterFor } from "../providers/gateway";
 import { ProviderError } from "../providers/types";
-import { BadRequest, NotFound, requireActor, type Env } from "./context";
+import { BadRequest, NotFound, requireActor, activeScope, type Env } from "./context";
+import { assertCan, providerScope } from "../lib/permissions";
+import { record } from "../lib/audit";
 
 export const providerRoutes = new Hono<Env>();
 
@@ -34,10 +36,17 @@ function publicView(row: typeof schema.providerConnections.$inferSelect) {
 
 providerRoutes.get("/", async (c) => {
   const actor = requireActor(c);
+  const scope = activeScope(c);
+  await assertCan(actor, "provider.read", scope);
+
   const rows = await db
     .select()
     .from(schema.providerConnections)
-    .where(eq(schema.providerConnections.ownerUserId, actor.id));
+    .where(
+      scope.ownerOrgId
+        ? eq(schema.providerConnections.ownerOrgId, scope.ownerOrgId)
+        : eq(schema.providerConnections.ownerUserId, actor.id),
+    );
 
   const withModels = await Promise.all(
     rows.map(async (row) => ({
@@ -69,10 +78,13 @@ providerRoutes.post("/", async (c) => {
     throw new BadRequest("Check the form.", z.flattenError(parsed.error).fieldErrors);
   }
 
+  const scope = activeScope(c);
+  await assertCan(actor, "provider.manage", scope);
+
   const row = {
     id: crypto.randomUUID(),
-    ownerUserId: actor.id,
-    ownerOrgId: null,
+    ownerUserId: scope.ownerOrgId ? null : actor.id,
+    ownerOrgId: scope.ownerOrgId,
     name: parsed.data.name,
     kind: parsed.data.kind,
     baseUrl: parsed.data.baseUrl.replace(/\/+$/, ""),
@@ -84,6 +96,12 @@ providerRoutes.post("/", async (c) => {
   };
 
   await db.insert(schema.providerConnections).values(row);
+  /* The key itself is never logged — only that a connection was added, by whom
+     and to where. */
+  await record(scope.ownerOrgId, actor, "provider.added", row.id, {
+    name: row.name,
+    baseUrl: row.baseUrl,
+  });
   return c.json({ provider: publicView(row) }, 201);
 });
 
@@ -91,15 +109,14 @@ providerRoutes.post("/", async (c) => {
    provider that is temporarily down can still be saved and refreshed later. */
 providerRoutes.post("/:id/refresh", async (c) => {
   const actor = requireActor(c);
+  const scope = await providerScope(c.req.param("id"));
+  if (!scope) throw new NotFound();
+  await assertCan(actor, "provider.manage", scope);
+
   const [row] = await db
     .select()
     .from(schema.providerConnections)
-    .where(
-      and(
-        eq(schema.providerConnections.id, c.req.param("id")),
-        eq(schema.providerConnections.ownerUserId, actor.id),
-      ),
-    )
+    .where(eq(schema.providerConnections.id, c.req.param("id")))
     .limit(1);
 
   if (!row) throw new NotFound();
@@ -197,16 +214,14 @@ async function mapWithConcurrency<T, R>(
 
 providerRoutes.delete("/:id", async (c) => {
   const actor = requireActor(c);
-  const deleted = await db
-    .delete(schema.providerConnections)
-    .where(
-      and(
-        eq(schema.providerConnections.id, c.req.param("id")),
-        eq(schema.providerConnections.ownerUserId, actor.id),
-      ),
-    )
-    .returning({ id: schema.providerConnections.id });
+  const scope = await providerScope(c.req.param("id"));
+  if (!scope) throw new NotFound();
+  await assertCan(actor, "provider.manage", scope);
 
-  if (deleted.length === 0) throw new NotFound();
+  await db
+    .delete(schema.providerConnections)
+    .where(eq(schema.providerConnections.id, c.req.param("id")));
+
+  await record(scope.ownerOrgId ?? null, actor, "provider.removed", c.req.param("id"));
   return c.json({ ok: true });
 });
