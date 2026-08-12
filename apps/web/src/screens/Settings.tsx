@@ -40,16 +40,16 @@ export function Settings() {
 
   return (
     <section className="flex-1 min-w-0 flex flex-col bg-canvas overflow-auto scroll-quiet">
-      <header className="h-[46px] flex-none flex items-center gap-3 px-[26px] border-b rule sticky top-0 bg-canvas z-10">
-        <h1 className="font-display text-[14px] font-semibold">Settings</h1>
-        <span className="text-[12.5px] text-tertiary">{status?.email}</span>
+      <header className="h-[46px] flex-none flex items-center gap-3 px-4 md:px-[26px] border-b rule sticky top-0 bg-canvas z-10 overflow-x-auto scroll-quiet">
+        <h1 className="font-display text-[14px] font-semibold whitespace-nowrap">Settings</h1>
+        <span className="text-[12.5px] text-tertiary truncate">{status?.email}</span>
         <span className="flex-1" />
         {status?.instanceRole === "instance_admin" && (
           <span className="font-mono text-[10px] text-faint">instance admin</span>
         )}
       </header>
 
-      <div className="px-[26px] py-6 flex flex-col gap-8 max-w-[620px]">
+      <div className="px-4 md:px-[26px] py-5 md:py-6 flex flex-col gap-8 max-w-[620px]">
         <PasswordSection onChanged={refresh} />
         <TwoFactorSection status={status} onChanged={refresh} />
         <SessionsSection sessions={sessions} onChanged={refresh} />
@@ -330,7 +330,7 @@ function SessionsSection({
         {sessions.map((session) => (
           <div
             key={session.id}
-            className="flex items-center gap-2.5 border rule rounded-lg px-3 py-2.5 bg-raised"
+            className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border rule rounded-lg px-3 py-2.5 bg-raised"
           >
             <span className={session.current ? "dot dot-live" : "dot dot-idle"} />
             <span className="text-[12.5px] text-secondary truncate flex-1">

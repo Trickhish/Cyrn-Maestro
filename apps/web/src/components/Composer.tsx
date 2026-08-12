@@ -67,13 +67,15 @@ export function Composer({ placeholder, hints, chip, live, onSend, onChange }: C
         <span className="hint flex-none">⏎</span>
       </form>
 
-      <div className="flex gap-4 flex-wrap">
-        {hints.map((h) => (
-          <span key={h} className="hint">
-            {h}
-          </span>
-        ))}
-      </div>
+      {hints.length > 0 && (
+        <div className="hidden md:flex gap-4 flex-wrap">
+          {hints.map((h) => (
+            <span key={h} className="hint">
+              {h}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

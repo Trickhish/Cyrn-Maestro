@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNarrow } from "../lib/useNarrow";
 import { api, type TaskStatus } from "../lib/api";
 import { useTaskStream, type ThreadItem, type ToolEntry } from "../lib/useTaskStream";
 import { Composer } from "../components/Composer";
@@ -29,25 +30,30 @@ export function LiveThread({ taskId, onBack }: { taskId: string; onBack: () => v
   }
 
   const running = !TERMINAL.includes(live.status);
+  const narrow = useNarrow();
 
   return (
     <section className="flex-1 min-w-0 flex flex-col bg-canvas">
-      <header className="h-[46px] flex-none flex items-center gap-3 px-[18px] border-b rule">
+      <header className="h-[46px] flex-none flex items-center gap-3 px-4 md:px-[18px] border-b rule overflow-x-auto scroll-quiet">
         <button type="button" className="text-[13px] text-tertiary hover:text-primary" onClick={onBack}>
           {live.task?.projectName ?? "project"}
         </button>
         <span className="text-fainter">/</span>
-        <h1 className="text-[13px] font-semibold truncate">{live.task?.title ?? "…"}</h1>
+        <h1 className="text-[13px] font-semibold truncate min-w-0">{live.task?.title ?? "…"}</h1>
         <StatusPill status={live.status} />
         <span className="flex-1" />
-        {live.model && <span className="font-mono text-[10px] text-plan">{live.model}</span>}
-        {live.nodeName && <span className="font-mono text-[10px] text-faint">{live.nodeName}</span>}
+        {live.model && (
+          <span className="hidden sm:inline font-mono text-[10px] text-plan whitespace-nowrap">{live.model}</span>
+        )}
+        {live.nodeName && (
+          <span className="hidden sm:inline font-mono text-[10px] text-faint whitespace-nowrap">{live.nodeName}</span>
+        )}
       </header>
 
       <div
         ref={scroller}
         onScroll={onScroll}
-        className="flex-1 min-h-0 overflow-auto scroll-quiet px-[26px] py-5 flex flex-col gap-[18px]"
+        className="flex-1 min-h-0 overflow-auto scroll-quiet px-4 md:px-[26px] py-5 flex flex-col gap-[18px]"
       >
         {live.items.map((item, i) => (
           <Item key={`${item.kind}-${item.seq}-${i}`} item={item} taskId={taskId} />
@@ -60,7 +66,7 @@ export function LiveThread({ taskId, onBack }: { taskId: string; onBack: () => v
 
       <footer className="flex-none border-t rule bg-canvas">
         {running && (
-          <div className="flex items-center gap-3.5 px-[18px] py-2 font-mono text-[11px] border-b rule">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 md:px-[18px] py-2 font-mono text-[11px] border-b rule">
             <span className="flex items-center gap-[7px] text-accent-hi">
               <span className="dot dot-running" />
               <span>{live.status === "awaiting_approval" ? "needs you" : "running"}</span>
@@ -91,12 +97,14 @@ export function LiveThread({ taskId, onBack }: { taskId: string; onBack: () => v
           </div>
         )}
 
-        <div className="px-[18px] pt-3 pb-3.5">
+        <div className="px-4 md:px-[18px] pt-3 pb-3.5">
           <Composer
             live={running}
             placeholder={
               running
-                ? "Steer it while it runs — it will pick this up on the next step"
+                ? narrow
+                  ? "Steer it…"
+                  : "Steer it while it runs — it will pick this up on the next step"
                 : "This task has finished."
             }
             hints={["⏎ send", "⇧⏎ newline", "⌘K palette", "⌘\\ toggle panel"]}
@@ -125,7 +133,7 @@ function Item({ item, taskId }: { item: ThreadItem; taskId: string }) {
     case "assistant":
       return (
         <div className="flex flex-col gap-2 max-w-[720px]">
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
             <span className="speaker">agent</span>
             {item.model && <span className="font-mono text-[10px] text-plan">{item.model}</span>}
           </div>

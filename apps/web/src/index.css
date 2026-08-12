@@ -121,6 +121,8 @@
   .pill {
     display: inline-flex;
     align-items: center;
+    white-space: nowrap;
+    flex: none;
     gap: 6px;
     padding: 2px 8px;
     border-radius: 999px;
@@ -347,6 +349,45 @@
     line-height: 1.65;
     color: var(--color-secondary);
   }
+}
+
+@layer components {
+  /* Touch targets.
+   *
+   * A 22px chip is comfortable with a mouse and a coin toss with a thumb. On
+   * anything without a fine pointer the interactive chrome grows to roughly
+   * the 44px Apple and Google both settle on, without changing the desktop
+   * density the design is built around. */
+  @media (pointer: coarse) {
+    .btn {
+      padding-block: 0.6rem;
+      padding-inline: 0.9rem;
+    }
+    .btn-chip {
+      padding-block: 0.45rem;
+      padding-inline: 0.7rem;
+      font-size: 11.5px;
+    }
+    .btn-sm {
+      padding-block: 0.5rem;
+    }
+    .rail-item {
+      padding-block: 0.62rem;
+    }
+    .tool-row {
+      padding-block: 0.5rem;
+    }
+    .tab {
+      padding-block: 0.6rem;
+    }
+    select,
+    input {
+      /* Under 16px, iOS Safari zooms the page on focus and never zooms back —
+         the single most common way a mobile form feels broken. */
+      font-size: max(16px, 1em);
+    }
+  }
+
 }
 
 @layer utilities {

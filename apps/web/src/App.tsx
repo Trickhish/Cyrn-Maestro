@@ -21,6 +21,7 @@ export default function App() {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [view, setViewState] = useState<View>(() => viewFromHash(location.hash) ?? { name: "connections", tab: "nodes" });
   const [theme, toggleTheme] = useTheme();
+  const [menuOpen, setMenuOpen] = useState(false);
 
   /* Navigation writes the hash; the hash drives the view. That way a pasted
      link, a reload and the back button all land in the same place. */
@@ -89,6 +90,9 @@ export default function App() {
   const project =
     view.name === "project" ? projects.find((p) => p.id === view.projectId) : undefined;
 
+  const orgLabel =
+    organizations.find((o) => o.id === getActiveOrg())?.name ?? actor.email.split("@")[0];
+
   return (
     <div className="h-full flex bg-canvas text-primary">
       <Rail
@@ -105,15 +109,36 @@ export default function App() {
         }}
         theme={theme}
         onToggleTheme={toggleTheme}
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
       />
+
+      {/* The column that holds the screen. On a phone it carries a bar with the
+          menu button, because the rail is off-canvas and otherwise unreachable. */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        <div className="md:hidden h-12 flex-none flex items-center gap-2.5 px-3 border-b rule bg-canvas-alt">
+          <button
+            type="button"
+            aria-label="Open menu"
+            onClick={() => setMenuOpen(true)}
+            className="w-9 h-9 -ml-1 grid place-items-center rounded-md text-secondary hover:text-primary"
+          >
+            <svg viewBox="0 0 16 16" width={17} height={17} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
+              <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />
+            </svg>
+          </button>
+          <img src="/logo-mark-arcs.svg" alt="" width={18} height={18} className="block" />
+          <span className="font-display text-[13px] font-semibold tracking-[-0.01em]">maestro</span>
+          <span className="text-fainter">/</span>
+          <span className="text-[12.5px] text-tertiary truncate">{orgLabel}</span>
+        </div>
+
 
       {view.name === "connections" && (
         <Connections
           tab={view.tab ?? "nodes"}
           onTab={(tab) => setView({ name: "connections", tab })}
-          ownerLabel={
-            organizations.find((o) => o.id === getActiveOrg())?.name ?? actor.email.split("@")[0]
-          }
+          ownerLabel={orgLabel}
         />
       )}
 
@@ -154,6 +179,7 @@ export default function App() {
       {projects.length === 0 && view.name === "project" && (
         <Empty>Create a project in the rail to get started.</Empty>
       )}
+      </div>
     </div>
   );
 }

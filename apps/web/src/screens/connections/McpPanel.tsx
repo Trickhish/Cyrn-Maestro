@@ -93,7 +93,7 @@ function ServerRow({ server, onChanged }: { server: McpServer; onChanged: () => 
 
   return (
     <div className="flex flex-col gap-2 border rule rounded-lg px-3 py-2.5 bg-raised">
-      <div className="flex items-center gap-2.5">
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
         <span
           className={
             !server.enabled
@@ -252,7 +252,7 @@ function AddServer({ onAdded }: { onAdded: () => void }) {
 
   return (
     <form className="flex flex-col gap-2 border rule rounded-lg px-3 py-3 bg-surface" onSubmit={submit}>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <Field label="Name" hint="Becomes the tool prefix, e.g. github__create_issue">
           <input
             className={inputClass}
@@ -285,7 +285,7 @@ function AddServer({ onAdded }: { onAdded: () => void }) {
               required
             />
           </Field>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <Field label="Auth header name" hint="Optional">
               <input
                 className={inputClass}
@@ -306,7 +306,7 @@ function AddServer({ onAdded }: { onAdded: () => void }) {
           </div>
         </>
       ) : (
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <Field label="Command">
             <input
               className={inputClass}

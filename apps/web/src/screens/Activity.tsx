@@ -77,14 +77,14 @@ export function Activity({ org }: { org: Organization | undefined }) {
 
   return (
     <section className="flex-1 min-w-0 flex flex-col bg-canvas overflow-auto scroll-quiet">
-      <header className="h-[46px] flex-none flex items-center gap-3 px-[26px] border-b rule sticky top-0 bg-canvas z-10">
-        <h1 className="font-display text-[14px] font-semibold">Activity</h1>
+      <header className="h-[46px] flex-none flex items-center gap-3 px-4 md:px-[26px] border-b rule sticky top-0 bg-canvas z-10 overflow-x-auto scroll-quiet">
+        <h1 className="font-display text-[14px] font-semibold whitespace-nowrap">Activity</h1>
         <span className="text-[12.5px] text-tertiary">{org.name}</span>
         <span className="flex-1" />
-        <span className="font-mono text-[11px] text-faint">append-only</span>
+        <span className="hidden sm:inline font-mono text-[11px] text-faint whitespace-nowrap">append-only</span>
       </header>
 
-      <div className="px-[26px] py-6 max-w-[860px] flex flex-col gap-1">
+      <div className="px-4 md:px-[26px] py-5 md:py-6 max-w-[860px] flex flex-col gap-1">
         {error && <div className="text-[13px] text-warn-hi">{error}</div>}
 
         {!error && entries.length === 0 && (
@@ -94,7 +94,7 @@ export function Activity({ org }: { org: Organization | undefined }) {
         {entries.map((entry) => (
           <div
             key={entry.id}
-            className="flex items-baseline gap-2.5 border-b rule py-2 text-[13px]"
+            className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 border-b rule py-2 text-[13px]"
           >
             <span
               className={`dot flex-none translate-y-[3px] ${

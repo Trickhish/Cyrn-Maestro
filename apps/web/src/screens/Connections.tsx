@@ -54,8 +54,8 @@ export function Connections({
 
   return (
     <section className="flex-1 min-w-0 flex flex-col bg-canvas overflow-auto scroll-quiet">
-      <header className="h-[46px] flex-none flex items-center gap-1 px-[26px] border-b rule sticky top-0 bg-canvas z-10">
-        <h1 className="font-display text-[14px] font-semibold mr-3">Connections</h1>
+      <header className="h-[46px] flex-none flex items-center gap-1 px-4 md:px-[26px] border-b rule sticky top-0 bg-canvas z-10 overflow-x-auto scroll-quiet">
+        <h1 className="font-display text-[14px] font-semibold mr-3 whitespace-nowrap">Connections</h1>
 
         {TABS.map((entry) => (
           <button
@@ -69,14 +69,15 @@ export function Connections({
           </button>
         ))}
 
-        <span className="text-[12.5px] text-tertiary">{ownerLabel}</span>
+        {/* The mobile bar already names the owner. */}
+        <span className="hidden md:inline text-[12.5px] text-tertiary">{ownerLabel}</span>
         <span className="flex-1" />
-        <span className="font-mono text-[11px] text-tertiary tnum">
+        <span className="font-mono text-[11px] text-tertiary tnum whitespace-nowrap">
           {online}/{nodes.length} nodes · {usableModels} models
         </span>
       </header>
 
-      <div className="px-[26px] py-6 max-w-[860px]">
+      <div className="px-4 md:px-[26px] py-5 md:py-6 max-w-[860px]">
         {tab === "nodes" && <NodesPanel nodes={nodes} onChanged={() => void refresh()} />}
         {tab === "providers" && (
           <ProvidersPanel providers={providers} onChanged={() => void refresh()} />

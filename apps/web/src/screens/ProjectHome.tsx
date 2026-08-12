@@ -75,9 +75,9 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
 
   return (
     <section className="flex-1 min-w-0 flex flex-col bg-canvas overflow-auto scroll-quiet">
-      <header className="h-[46px] flex-none flex items-center gap-3 px-[26px] border-b rule sticky top-0 bg-canvas z-10">
-        <h1 className="font-display text-[14px] font-semibold">{project.name}</h1>
-        <span className="text-[12.5px] text-tertiary">
+      <header className="h-[46px] flex-none flex items-center gap-3 px-4 md:px-[26px] border-b rule sticky top-0 bg-canvas z-10 overflow-x-auto scroll-quiet">
+        <h1 className="font-display text-[14px] font-semibold whitespace-nowrap">{project.name}</h1>
+        <span className="hidden sm:inline text-[12.5px] text-tertiary whitespace-nowrap">
           {online.length} node{online.length === 1 ? "" : "s"} online
         </span>
         <span className="flex-1" />
@@ -97,17 +97,17 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
         >
           Settings
         </button>
-        <span className="font-mono text-[11px] text-tertiary tnum ml-2">
+        <span className="hidden sm:inline font-mono text-[11px] text-tertiary tnum ml-2 whitespace-nowrap">
           {live.length} running · {needsYou.length} need you
         </span>
       </header>
 
       {tab === "settings" ? (
-        <div className="px-[26px] py-6">
+        <div className="px-4 md:px-[26px] py-5 md:py-6">
           <ProjectSettings project={project} onChanged={() => void refresh()} />
         </div>
       ) : (
-      <div className="px-[26px] py-6 flex flex-col gap-7 max-w-[860px]">
+      <div className="px-4 md:px-[26px] py-5 md:py-6 flex flex-col gap-7 max-w-[860px]">
         <div className="flex flex-col gap-2.5">
           <Composer
             placeholder="What should the agent do?"

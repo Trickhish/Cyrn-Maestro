@@ -70,18 +70,18 @@ export function Conductor({ onOpenTask }: { onOpenTask: (taskId: string) => void
 
   return (
     <section className="flex-1 min-w-0 flex flex-col bg-canvas">
-      <header className="h-[46px] flex-none flex items-center gap-3 px-[26px] border-b rule">
-        <h1 className="font-display text-[14px] font-semibold">Conductor</h1>
-        <span className="text-[12.5px] text-tertiary">the conversation about everything</span>
+      <header className="h-[46px] flex-none flex items-center gap-3 px-4 md:px-[26px] border-b rule overflow-x-auto scroll-quiet">
+        <h1 className="font-display text-[14px] font-semibold whitespace-nowrap">Conductor</h1>
+        <span className="hidden md:inline text-[12.5px] text-tertiary">the conversation about everything</span>
         <span className="flex-1" />
-        <span className="font-mono text-[11px] text-tertiary tnum">
+        <span className="font-mono text-[11px] text-tertiary tnum whitespace-nowrap">
           {live.length} running · {needsYou.length} need you
         </span>
       </header>
 
       <div
         ref={scroller}
-        className="flex-1 min-h-0 overflow-auto scroll-quiet px-[26px] py-5 flex flex-col gap-[18px]"
+        className="flex-1 min-h-0 overflow-auto scroll-quiet px-4 md:px-[26px] py-5 flex flex-col gap-[18px]"
       >
         {messages.length === 0 && (
           <div className="flex flex-col gap-4 max-w-[760px]">
@@ -121,7 +121,7 @@ export function Conductor({ onOpenTask }: { onOpenTask: (taskId: string) => void
 
         {messages.map((message, i) => (
           <div key={i} className="flex flex-col gap-2 max-w-[760px]">
-            <div className="flex items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
               <span className="speaker">{message.role === "user" ? "you" : "conductor"}</span>
               {message.model && (
                 <span className="font-mono text-[10px] text-plan">{message.model}</span>
@@ -167,7 +167,7 @@ export function Conductor({ onOpenTask }: { onOpenTask: (taskId: string) => void
         )}
       </div>
 
-      <footer className="flex-none border-t rule px-[26px] pt-3 pb-3.5">
+      <footer className="flex-none border-t rule px-4 md:px-[26px] pt-3 pb-3.5">
         <Composer
           chip="read-only"
           placeholder="Ask about everything"

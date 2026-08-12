@@ -68,7 +68,7 @@ export function NodesPanel({
       {nodes.map((node) => (
         <div
           key={node.id}
-          className="flex items-center gap-2.5 border rule rounded-lg px-3 py-2.5 bg-raised"
+          className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border rule rounded-lg px-3 py-2.5 bg-raised"
         >
           <span
             className={

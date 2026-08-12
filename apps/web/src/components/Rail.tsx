@@ -28,6 +28,11 @@ interface RailProps {
   onProjectCreated: (project: Project) => void;
   theme: string;
   onToggleTheme: () => void;
+  /* On a phone the rail is a drawer rather than a column: at 216px it would
+     take more than half a 390px screen and leave the actual work crushed into
+     the remainder. */
+  open: boolean;
+  onClose: () => void;
 }
 
 export function Rail({
@@ -41,6 +46,8 @@ export function Rail({
   onProjectCreated,
   theme,
   onToggleTheme,
+  open,
+  onClose,
 }: RailProps) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
@@ -62,10 +69,31 @@ export function Rail({
     ).length;
   }
 
+  /* Any navigation closes the drawer. Leaving it open over the thing the user
+     just asked to see is the classic mobile drawer bug. */
+  function go(next: View) {
+    onNavigate(next);
+    onClose();
+  }
+
   return (
+    <>
+      {/* Dims and captures taps behind an open drawer. Desktop never sees it. */}
+      {open && (
+        <button
+          type="button"
+          aria-label="Close menu"
+          onClick={onClose}
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+        />
+      )}
+
     <nav
       aria-label="Primary"
-      className="w-[216px] flex-none bg-canvas-alt border-r rule flex flex-col py-3.5"
+      className={`w-[264px] md:w-[216px] flex-none bg-canvas-alt border-r rule flex flex-col py-3.5
+        fixed inset-y-0 left-0 z-40 transition-transform duration-200 overflow-y-auto scroll-quiet
+        md:static md:z-auto md:transition-none md:overflow-visible
+        ${open ? "translate-x-0" : "-translate-x-full"} md:translate-x-0`}
     >
       <div className="flex items-center gap-[9px] px-3.5 pb-3">
         <img src="/logo-mark-arcs.svg" alt="" width={22} height={22} className="block" />
@@ -84,7 +112,7 @@ export function Rail({
           className="rail-item"
           data-active={view.name === "conductor"}
           data-accent="true"
-          onClick={() => onNavigate({ name: "conductor" })}
+          onClick={() => go({ name: "conductor" })}
         >
           <ConductorIcon />
           <span className="flex-1">Conductor</span>
@@ -94,7 +122,7 @@ export function Rail({
           className="rail-item"
           onClick={() => {
             const first = tasks.find((t) => t.status === "awaiting_approval");
-            if (first) onNavigate({ name: "task", taskId: first.id });
+            if (first) go({ name: "task", taskId: first.id });
           }}
         >
           <InboxIcon />
@@ -118,7 +146,7 @@ export function Rail({
               type="button"
               className="rail-item"
               data-active={view.name === "project" && view.projectId === project.id}
-              onClick={() => onNavigate({ name: "project", projectId: project.id })}
+              onClick={() => go({ name: "project", projectId: project.id })}
             >
               <span className={glyphFor(project.id)} />
               <span className="flex-1 truncate">{project.name}</span>
@@ -139,6 +167,7 @@ export function Rail({
               setName("");
               setCreating(false);
               onProjectCreated(project);
+              onClose();
             }}
           >
             <input
@@ -168,7 +197,7 @@ export function Rail({
           type="button"
           className="rail-item"
           data-active={view.name === "connections"}
-          onClick={() => onNavigate({ name: "connections" })}
+          onClick={() => go({ name: "connections" })}
         >
           <FleetIcon />
           <span className="flex-1">Connections</span>
@@ -178,7 +207,7 @@ export function Rail({
             type="button"
             className="rail-item"
             data-active={view.name === "activity"}
-            onClick={() => onNavigate({ name: "activity" })}
+            onClick={() => go({ name: "activity" })}
           >
             <ActivityIcon />
             <span className="flex-1">Activity</span>
@@ -194,7 +223,7 @@ export function Rail({
             type="button"
             className="rail-item"
             data-active={view.name === "instance"}
-            onClick={() => onNavigate({ name: "instance" })}
+            onClick={() => go({ name: "instance" })}
           >
             <ServerIcon />
             <span className="flex-1">Instance</span>
@@ -204,12 +233,13 @@ export function Rail({
           type="button"
           className="rail-item"
           data-active={view.name === "settings"}
-          onClick={() => onNavigate({ name: "settings" })}
+          onClick={() => go({ name: "settings" })}
         >
           <SettingsIcon />
           <span className="flex-1 truncate">{actor.email}</span>
         </button>
       </div>
     </nav>
+    </>
   );
 }

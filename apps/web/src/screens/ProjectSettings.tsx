@@ -43,7 +43,7 @@ export function ProjectSettings({ project, onChanged }: { project: Project; onCh
           </p>
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <Labelled label="Tier">
             <select
               className={selectClass}
@@ -103,7 +103,7 @@ export function ProjectSettings({ project, onChanged }: { project: Project; onCh
         {rules.map((rule) => (
           <div
             key={rule.id}
-            className="flex items-center gap-2.5 border rule rounded-lg px-3 py-2.5 bg-raised"
+            className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border rule rounded-lg px-3 py-2.5 bg-raised"
           >
             <span className={rule.enabled ? "dot dot-running" : "dot dot-idle"} />
             <span className="font-mono text-[10.5px] text-faint tnum w-8">{rule.priority}</span>
@@ -151,7 +151,7 @@ export function ProjectSettings({ project, onChanged }: { project: Project; onCh
             }
           }}
         >
-          <div className="grid grid-cols-[1fr_80px] gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_80px] gap-2">
             <Labelled label="Name">
               <input
                 className={selectClass}
@@ -171,7 +171,7 @@ export function ProjectSettings({ project, onChanged }: { project: Project; onCh
             </Labelled>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <Labelled label="When the prompt contains">
               <input
                 className={selectClass}
@@ -196,7 +196,7 @@ export function ProjectSettings({ project, onChanged }: { project: Project; onCh
             </Labelled>
           </div>
 
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <Labelled label="Then use tier">
               <select
                 className={selectClass}

@@ -9,7 +9,7 @@
  *   bun run scripts/drive.ts <url> <out.png> [js-to-run] [wait-ms]
  */
 
-const [url, out, script = "", waitMs = "1200"] = process.argv.slice(2);
+const [url, out, script = "", waitMs = "1200", width = "1440", height = "1000"] = process.argv.slice(2);
 
 if (!url || !out) {
   console.error("usage: drive.ts <url> <out.png> [js] [waitMs]");
@@ -28,7 +28,7 @@ const chrome = Bun.spawn(
     "--hide-scrollbars",
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${profile}`,
-    "--window-size=1440,1000",
+    `--window-size=${width},${height}`,
     "about:blank",
   ],
   { stdout: "ignore", stderr: "ignore" },
@@ -74,7 +74,31 @@ const { targetId } = await send("Target.createTarget", { url: "about:blank" });
 const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
 
 await send("Page.enable", {}, sessionId);
+await send(
+  "Emulation.setDeviceMetricsOverride",
+  { width: Number(width), height: Number(height), deviceScaleFactor: 2, mobile: Number(width) < 700 },
+  sessionId,
+);
 await send("Runtime.enable", {}, sessionId);
+
+/* A session cookie set before the first navigation, so the app mounts already
+   signed in. Setting it from the page script instead means reloading to make it
+   count, and a reload throws away whatever else that script was going to do. */
+if (process.env.DRIVE_COOKIE) {
+  const { host, protocol } = new URL(url);
+  await send(
+    "Network.setCookie",
+    {
+      name: "maestro_session",
+      value: process.env.DRIVE_COOKIE,
+      domain: host.split(":")[0],
+      path: "/",
+      secure: protocol === "https:",
+    },
+    sessionId,
+  );
+}
+
 await send("Page.navigate", { url }, sessionId);
 
 /* Give the app time to mount and settle before touching it. */

@@ -41,15 +41,15 @@ export function InstanceSettings({ email }: { email: string }) {
 
   return (
     <section className="flex-1 min-w-0 flex flex-col bg-canvas overflow-auto scroll-quiet">
-      <header className="h-[46px] flex-none flex items-center gap-3 px-[26px] border-b rule sticky top-0 bg-canvas z-10">
-        <h1 className="font-display text-[14px] font-semibold">Instance settings</h1>
-        <span className="text-[12.5px] text-tertiary">everyone on this server</span>
+      <header className="h-[46px] flex-none flex items-center gap-3 px-4 md:px-[26px] border-b rule sticky top-0 bg-canvas z-10 overflow-x-auto scroll-quiet">
+        <h1 className="font-display text-[14px] font-semibold whitespace-nowrap">Instance settings</h1>
+        <span className="hidden sm:inline text-[12.5px] text-tertiary whitespace-nowrap">everyone on this server</span>
         <span className="flex-1" />
-        <span className="font-mono text-[10px] text-faint">instance admin</span>
+        <span className="font-mono text-[10px] text-faint whitespace-nowrap">instance admin</span>
       </header>
 
       {settings && (
-        <div className="px-[26px] py-6 flex flex-col gap-8 max-w-[620px]">
+        <div className="px-4 md:px-[26px] py-5 md:py-6 flex flex-col gap-8 max-w-[620px]">
           <SmtpForm settings={settings} onSaved={setSettings} adminEmail={email} />
           <RegistrationForm settings={settings} onSaved={setSettings} />
         </div>
@@ -151,7 +151,7 @@ function SmtpForm({
       </div>
 
       <form className="flex flex-col gap-3" onSubmit={save}>
-        <div className="grid grid-cols-[1fr_120px] gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-[1fr_120px] gap-2">
           <Field label="Host">
             <input
               className={inputClass}
@@ -185,7 +185,7 @@ function SmtpForm({
           </select>
         </Field>
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <Field label="Username">
             <input
               className={inputClass}
@@ -210,7 +210,7 @@ function SmtpForm({
           </Field>
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <Field label="From address">
             <input
               className={inputClass}

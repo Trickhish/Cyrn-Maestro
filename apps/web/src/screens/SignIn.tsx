@@ -50,7 +50,7 @@ export function SignIn({ registrationOpen, onSignedIn }: SignInProps) {
   return (
     <div className="h-full grid place-items-center bg-canvas-alt px-4">
       <div className="w-full max-w-[380px] flex flex-col gap-6">
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
           <img src="/logo-mark-arcs.svg" alt="" width={26} height={26} />
           <span className="font-display text-[17px] font-semibold tracking-[-0.01em]">maestro</span>
         </div>

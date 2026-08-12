@@ -40,7 +40,7 @@ export function ProvidersPanel({
         const usable = provider.models.filter((m) => m.probeOk !== false).length;
         return (
           <div key={provider.id} className="flex flex-col gap-2 border rule rounded-lg px-3 py-2.5 bg-raised">
-            <div className="flex items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
               <span className={provider.lastHealthOk === false ? "dot dot-off" : "dot dot-done"} />
               <span className="text-[13px] font-medium">{provider.name}</span>
               <span className="font-mono text-[10.5px] text-faint truncate">{provider.baseUrl}</span>
@@ -157,7 +157,7 @@ function AddProvider({ onAdded }: { onAdded: () => void }) {
 
   return (
     <form className="flex flex-col gap-2 border rule rounded-lg px-3 py-3 bg-surface" onSubmit={submit}>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <Field label="Name">
           <input
             className={inputClass}
