@@ -431,3 +431,114 @@ describe("create_task", () => {
     await settle(out.match(/\[([^\]]+)\]/)![1]);
   });
 });
+
+/* The Conductor has no filesystem, so what a project "knows" about itself is
+   whatever a worker task wrote down. Reading that back is how it answers
+   questions about a project it cannot look at, and how it checks that a task
+   asked to document one actually did. */
+describe("project_knowledge", () => {
+  test("reports the brief, where it is checked out, and registered facts", async () => {
+    await db.update(schema.projects).set({ instructions: "A novel-writing pipeline." }).where(eq(schema.projects.id, "p-alice"));
+    await db.insert(schema.projectNotes).values({
+      id: "n-1", projectId: "p-alice", kind: "directory", label: "root",
+      value: "/root/prog/ai_novel", nodeId: null, createdAt: Date.now(),
+    });
+
+    const out = await runConductorTool(alice, "project_knowledge", {}, { projectId: "p-alice" });
+    expect(out).toContain("A novel-writing pipeline.");
+    expect(out).toContain("/root/prog/ai_novel");
+  });
+
+  /* Saying "(not set)" is the point: it tells the model to dispatch a task to
+     go and find out, rather than inventing an answer. */
+  test("says plainly when a project has nothing recorded yet", async () => {
+    const out = await runConductorTool(alice, "project_knowledge", {}, { projectId: "p-alice" });
+    expect(out).toContain("(not set)");
+    expect(out).toContain("none recorded");
+  });
+
+  test("needs a project, and says so when there is none", async () => {
+    const out = await runConductorTool(alice, "project_knowledge", {}, {});
+    expect(out).toContain("No project");
+  });
+
+  test("cannot read another owner's project", async () => {
+    const out = await runConductorTool(alice, "project_knowledge", { projectId: "p-bob" }, {});
+    expect(out).toContain("isn't yours");
+  });
+});
+
+/* Embedded on an org-owned project's page, every tool must answer about THAT
+   owner — the org — not about whatever the actor happens to own personally.
+   Reporting the actor's own projects and machines while sitting on an org
+   project's page is the bug this covers: the panel looked like it was about
+   the project it was embedded in, and quietly was not. */
+describe("scoped to an org-owned project", () => {
+  const context = { projectId: "p-org" };
+
+  beforeEach(async () => {
+    const now = Date.now();
+    await db.insert(schema.organizations).values({
+      id: "org-1", name: "Acme", slug: "acme", require2fa: false, createdAt: now,
+    });
+    await db.insert(schema.memberships).values({
+      id: "m-1", userId: "alice", orgId: "org-1", role: "admin", createdAt: now,
+    });
+    await db.insert(schema.projects).values({
+      id: "p-org", ownerUserId: null, ownerOrgId: "org-1", name: "Org Novel", slug: "org-novel",
+      repoUrl: null, branch: null, instructions: null, defaultModelId: null, spendCapUsd: null, createdAt: now,
+    });
+    await db.insert(schema.tasks).values({
+      id: "t-org", projectId: "p-org", workspaceId: null, nodeId: null, actorUserId: "alice",
+      title: "Draft chapter one", prompt: "draft it", status: "running", model: "m",
+      costUsd: 0, inputTokens: 0, outputTokens: 0, error: null,
+      startedAt: now, endedAt: null, createdAt: now,
+    });
+  });
+
+  test("list_projects reports the org's projects, not the actor's own", async () => {
+    const out = await runConductorTool(alice, "list_projects", {}, context);
+    expect(out).toContain("Org Novel");
+    expect(out).not.toContain("Alice API");
+  });
+
+  test("list_tasks reports the org's tasks, not the actor's own", async () => {
+    const out = await runConductorTool(alice, "list_tasks", { status: "all" }, context);
+    expect(out).toContain("Draft chapter one");
+    expect(out).not.toContain("Fix the flaky auth test");
+  });
+
+  test("search_history does not reach into the actor's personal projects", async () => {
+    const out = await runConductorTool(alice, "search_history", { query: "flaky" }, context);
+    expect(out).not.toContain("Fix the flaky auth test");
+  });
+
+  test("spend_report covers the org, not the actor's own projects", async () => {
+    const out = await runConductorTool(alice, "spend_report", {}, context);
+    expect(out).toContain("Org Novel");
+    expect(out).not.toContain("Alice API");
+  });
+
+  test("fleet_status reports the org's machines, not the actor's own", async () => {
+    await enrollNode("alice");
+    const out = await runConductorTool(alice, "fleet_status", {}, context);
+    expect(out).toContain("No machines are enrolled.");
+  });
+
+  test("list_model_lists reads the org's lists, not the actor's own", async () => {
+    await db.insert(schema.modelLists).values([
+      { id: "l-org", ownerUserId: null, ownerOrgId: "org-1", name: "org list", description: "the org's", createdAt: Date.now() },
+      { id: "l-mine", ownerUserId: "alice", ownerOrgId: null, name: "personal list", description: "mine", createdAt: Date.now() },
+    ]);
+
+    const out = await runConductorTool(alice, "list_model_lists", {}, context);
+    expect(out).toContain("org list");
+    expect(out).not.toContain("personal list");
+  });
+
+  /* Membership is what grants the reach, not merely naming the project id. */
+  test("a non-member gets nothing, even naming the project directly", async () => {
+    const out = await runConductorTool(bob, "list_projects", {}, context);
+    expect(out).not.toContain("Org Novel");
+  });
+});

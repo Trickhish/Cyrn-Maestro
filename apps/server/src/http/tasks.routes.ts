@@ -7,7 +7,7 @@ import { steer, cancel, decideApproval, isRunning } from "../tasks/runner";
 import { createTask } from "../tasks/create";
 import { planRoute } from "../router";
 import { assertCan, projectScope, taskScope } from "../lib/permissions";
-import { BadRequest, NotFound, requireActor, type Env } from "./context";
+import { BadRequest, NotFound, requireActor, activeScope, type Env } from "./context";
 import { record } from "../lib/audit";
 
 export const taskRoutes = new Hono<Env>();
@@ -21,8 +21,18 @@ const CreateTask = z.object({
 });
 
 taskRoutes.get("/", async (c) => {
-  const actor = requireActor(c);
+  requireActor(c);
   const projectId = c.req.query("projectId");
+
+  /* The scope the request is acting in, not the actor's personal one. An
+     org's project has no ownerUserId at all, so filtering on it returned an
+     empty history for every org project — the tasks were there, the page
+     just could not see them. The org header is verified against membership
+     upstream, so trusting it here grants nothing the actor did not have. */
+  const scope = activeScope(c);
+  const owned = scope.ownerOrgId
+    ? eq(schema.projects.ownerOrgId, scope.ownerOrgId)
+    : eq(schema.projects.ownerUserId, scope.ownerUserId!);
 
   const rows = await db
     .select({
@@ -42,14 +52,7 @@ taskRoutes.get("/", async (c) => {
     .from(schema.tasks)
     .innerJoin(schema.projects, eq(schema.tasks.projectId, schema.projects.id))
     .leftJoin(schema.nodes, eq(schema.tasks.nodeId, schema.nodes.id))
-    .where(
-      projectId
-        ? and(
-            eq(schema.projects.ownerUserId, actor.id),
-            eq(schema.tasks.projectId, projectId),
-          )
-        : eq(schema.projects.ownerUserId, actor.id),
-    )
+    .where(projectId ? and(owned, eq(schema.tasks.projectId, projectId)) : owned)
     .orderBy(desc(schema.tasks.createdAt))
     .limit(100);
 

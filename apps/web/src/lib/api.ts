@@ -485,14 +485,14 @@ export const api = {
   askConductor: (
     question: string,
     history: Array<{ role: "user" | "assistant"; content: string }>,
-    projectId?: string,
+    scope?: { projectId?: string; pinnedModel?: string; pinnedNodeId?: string },
   ) =>
     post<{
       text: string;
       usedTools: Array<{ name: string; args: unknown }>;
       usage: { inputTokens: number; outputTokens: number };
       model: string;
-    }>("/conductor/ask", { question, history, ...(projectId ? { projectId } : {}) }),
+    }>("/conductor/ask", { question, history, ...scope }),
 };
 
 /* ------------------------------------------------------------------ events */

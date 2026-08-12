@@ -1,14 +1,12 @@
 import { useEffect, useState } from "react";
 import {
   api,
-  ApiError,
   type NodeSummary,
   type Project,
   type Provider,
   type TaskStatus,
   type TaskSummary,
 } from "../lib/api";
-import { Composer } from "../components/Composer";
 import { RoutingChips } from "../components/RoutingChips";
 import { ProjectSettings } from "./ProjectSettings";
 import { Conductor } from "./Conductor";
@@ -31,7 +29,6 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [model, setModel] = useState<string>("");
   const [nodeId, setNodeId] = useState<string>("");
-  const [draft, setDraft] = useState("");
   const [tab, setTab] = useState<"tasks" | "settings">("tasks");
   const [error, setError] = useState<string>();
 
@@ -57,22 +54,6 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
   const live = tasks.filter((t) => !["completed", "failed", "cancelled"].includes(t.status));
   const needsYou = live.filter((t) => t.status === "awaiting_approval");
   const recent = tasks.filter((t) => ["completed", "failed", "cancelled"].includes(t.status));
-
-  async function dispatch(prompt: string) {
-    setError(undefined);
-    try {
-      const { task } = await api.createTask({
-        projectId: project.id,
-        prompt,
-        model: model || undefined,
-        nodeId: nodeId || undefined,
-      });
-      await refresh();
-      onOpenTask(task.id);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not start that task.");
-    }
-  }
 
   return (
     <section className="flex-1 min-w-0 flex flex-col bg-canvas overflow-auto scroll-quiet">
@@ -109,44 +90,50 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
         </div>
       ) : (
       <div className="px-4 md:px-[26px] py-5 md:py-6 flex flex-col gap-7 max-w-[860px]">
-        <div className="flex flex-col gap-2.5">
-          <Composer
-            placeholder="What should the agent do?"
-            hints={[]}
-            onChange={setDraft}
-            onSend={(text) => {
-              setDraft("");
-              void dispatch(text);
-            }}
-          />
+        {/* One input for the page. You describe the work; the Conductor picks
+            the model — or honours the pins below when you set them by hand —
+            dispatches it, and reports back in the same thread. */}
+        <Conductor
+          projectId={project.id}
+          embedded
+          onOpenTask={onOpenTask}
+          pinnedModel={model || undefined}
+          pinnedNodeId={nodeId || undefined}
+          onDispatched={() => void refresh()}
+          under={
+            <>
+              {/* No prompt: the Conductor rewrites what you type before it
+                  dispatches, so weighing the raw text would show a plan that
+                  is not the one that runs. Empty shows the project's default
+                  routing — which is what a dispatch without an explicit model
+                  actually uses. */}
+              <RoutingChips
+                projectId={project.id}
+                prompt=""
+                pinnedNodeId={nodeId || undefined}
+                pinnedModel={model || undefined}
+                onPinNode={(id) => setNodeId(id ?? "")}
+                onPinModel={(m) => setModel(m ?? "")}
+              />
 
-          <RoutingChips
-            projectId={project.id}
-            prompt={draft}
-            pinnedNodeId={nodeId || undefined}
-            pinnedModel={model || undefined}
-            onPinNode={(id) => setNodeId(id ?? "")}
-            onPinModel={(m) => setModel(m ?? "")}
-          />
-
-          {online.length === 0 && (
-            <div className="text-[12.5px] text-warn-hi border border-[var(--border-warn)] bg-raised rounded-lg px-3 py-2">
-              No node is online, so tasks cannot run. Add one from Fleet.
-            </div>
-          )}
-          {providers.length === 0 && (
-            <div className="text-[12.5px] text-warn-hi border border-[var(--border-warn)] bg-raised rounded-lg px-3 py-2">
-              No provider is connected. Add one in Providers before running a task.
-            </div>
-          )}
-          {error && (
-            <div className="text-[12.5px] text-bad-hi border border-[var(--border-warn)] bg-raised rounded-lg px-3 py-2">
-              {error}
-            </div>
-          )}
-        </div>
-
-        <Conductor projectId={project.id} embedded onOpenTask={onOpenTask} />
+              {online.length === 0 && (
+                <div className="text-[12.5px] text-warn-hi border border-[var(--border-warn)] bg-raised rounded-lg px-3 py-2">
+                  No node is online, so tasks cannot run. Add one from Fleet.
+                </div>
+              )}
+              {providers.length === 0 && (
+                <div className="text-[12.5px] text-warn-hi border border-[var(--border-warn)] bg-raised rounded-lg px-3 py-2">
+                  No provider is connected. Add one in Providers before running a task.
+                </div>
+              )}
+              {error && (
+                <div className="text-[12.5px] text-bad-hi border border-[var(--border-warn)] bg-raised rounded-lg px-3 py-2">
+                  {error}
+                </div>
+              )}
+            </>
+          }
+        />
 
         {live.length > 0 && (
           <Section title="Running">

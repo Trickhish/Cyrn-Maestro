@@ -1,4 +1,5 @@
 import { and, desc, eq, gte, inArray, like, or } from "drizzle-orm";
+import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
 import { db, schema } from "../db";
 import { getLiveNode, onlineNodes } from "../nodes/registry";
@@ -6,6 +7,7 @@ import { isRunning } from "../tasks/runner";
 import { createTask } from "../tasks/create";
 import { resolveModelList } from "../providers/gateway";
 import { can, projectScope, taskScope } from "../lib/permissions";
+import { getKnowledge } from "../projects/knowledge";
 import type { ToolDefinition } from "../providers/types";
 import type { Actor } from "../lib/auth";
 
@@ -16,8 +18,12 @@ import type { Actor } from "../lib/auth";
  * other models, and reviews what they did — it never edits code itself.
  *
  * Every tool takes the signed-in actor and scopes its query to what that actor
- * owns. The Conductor acts AS the user and is never elevated: it cannot see a
- * project the user cannot see, and asking it to is simply an empty result. */
+ * owns — their own account, or (when embedded on a project's own page, via
+ * ConductorContext) whichever owner actually holds that project, which may be
+ * an organization rather than the actor personally. Either way the Conductor
+ * acts AS the user and is never elevated: `can()` checks membership before
+ * any org-scoped query runs, so asking about a project or org the actor
+ * cannot see is simply an empty result. */
 
 /* Threaded through every tool call from the request that started the turn.
    Set when the Conductor is embedded on a specific project's own page, so
@@ -26,6 +32,13 @@ import type { Actor } from "../lib/auth";
    screen, where every tool still works — it just needs an explicit id. */
 export interface ConductorContext {
   projectId?: string;
+  /* What the user pinned in the interface's routing chips. A floor the
+     Conductor's own choice sits on top of: it may name a model or a list
+     itself, but when it does not, a pin the user set by hand still wins over
+     the project's default routing — otherwise the control would visibly do
+     nothing once the Conductor is the thing dispatching. */
+  pinnedModel?: string;
+  pinnedNodeId?: string;
 }
 
 const ACTIVE = ["queued", "assigned", "running", "awaiting_approval"] as const;
@@ -56,6 +69,13 @@ const SpendReport = z.object({
 
 const ListModelLists = NoArgs;
 
+const ProjectKnowledge = z.object({
+  projectId: z
+    .string()
+    .optional()
+    .describe("Defaults to the project this conversation is about, if any."),
+});
+
 const CreateTask = z
   .object({
     prompt: z.string().min(1).describe("What the worker model should do."),
@@ -84,6 +104,7 @@ export const CONDUCTOR_SCHEMAS = {
   search_history: SearchHistory,
   spend_report: SpendReport,
   list_model_lists: ListModelLists,
+  project_knowledge: ProjectKnowledge,
   create_task: CreateTask,
 } as const;
 
@@ -98,6 +119,8 @@ const DESCRIPTIONS: Record<ConductorToolName, string> = {
   spend_report: "Report token usage and cost, broken down by project.",
   list_model_lists:
     "List the model profiles set up for this project: a name and when to use it. Check this before choosing a model for create_task.",
+  project_knowledge:
+    "Read what a project has on record about itself: its brief, where it is checked out on each machine, and the facts and notes agents have registered. Read this before answering questions about a project, and again after a task was asked to fill it in.",
   create_task: "Dispatch a new task to a worker model. Pin a model, name a modelList, or leave both unset to use the project's default routing.",
 };
 
@@ -129,29 +152,32 @@ export async function runConductorTool(
 
   switch (name as ConductorToolName) {
     case "list_projects":
-      return listProjects(actor);
+      return listProjects(actor, context);
     case "fleet_status":
-      return fleetStatus(actor);
+      return fleetStatus(actor, context);
     case "list_tasks":
       return listTasks(actor, parsed.data as z.infer<typeof ListTasks>, context);
     case "get_task":
       return getTask(actor, parsed.data as z.infer<typeof GetTask>);
     case "search_history":
-      return searchHistory(actor, parsed.data as z.infer<typeof SearchHistory>);
+      return searchHistory(actor, parsed.data as z.infer<typeof SearchHistory>, context);
     case "spend_report":
-      return spendReport(actor, parsed.data as z.infer<typeof SpendReport>);
+      return spendReport(actor, parsed.data as z.infer<typeof SpendReport>, context);
     case "list_model_lists":
       return listModelLists(actor, context);
+    case "project_knowledge":
+      return projectKnowledge(actor, parsed.data as z.infer<typeof ProjectKnowledge>, context);
     case "create_task":
       return createTaskTool(actor, parsed.data as z.infer<typeof CreateTask>, context);
   }
 }
 
-async function listProjects(actor: Actor): Promise<string> {
-  const projects = await db
-    .select()
-    .from(schema.projects)
-    .where(eq(schema.projects.ownerUserId, actor.id));
+async function listProjects(actor: Actor, context: ConductorContext): Promise<string> {
+  const scope = await scopeFor(context, actor);
+  if (!scope || !(await can(actor, "project.read", scope))) return "No projects visible from here.";
+  const owned = ownedBy(schema.projects, scope);
+
+  const projects = await db.select().from(schema.projects).where(owned);
 
   if (projects.length === 0) return "No projects yet.";
 
@@ -159,7 +185,7 @@ async function listProjects(actor: Actor): Promise<string> {
     .select({ projectId: schema.tasks.projectId, status: schema.tasks.status })
     .from(schema.tasks)
     .innerJoin(schema.projects, eq(schema.tasks.projectId, schema.projects.id))
-    .where(eq(schema.projects.ownerUserId, actor.id));
+    .where(owned);
 
   return projects
     .map((p) => {
@@ -178,11 +204,14 @@ async function listProjects(actor: Actor): Promise<string> {
     .join("\n");
 }
 
-async function fleetStatus(actor: Actor): Promise<string> {
-  const rows = await db.select().from(schema.nodes).where(eq(schema.nodes.ownerUserId, actor.id));
+async function fleetStatus(actor: Actor, context: ConductorContext): Promise<string> {
+  const scope = await scopeFor(context, actor);
+  if (!scope || !(await can(actor, "node.read", scope))) return "No machines visible from here.";
+
+  const rows = await db.select().from(schema.nodes).where(ownedBy(schema.nodes, scope));
   if (rows.length === 0) return "No machines are enrolled.";
 
-  const live = onlineNodes({ ownerUserId: actor.id });
+  const live = onlineNodes(scope);
 
   const lines = rows.map((node) => {
     const connected = getLiveNode(node.id);
@@ -205,6 +234,9 @@ async function listTasks(
 ): Promise<string> {
   const status = args.status ?? "active";
   const effectiveProjectId = args.projectId ?? context.projectId;
+
+  const scope = await scopeFor(context, actor);
+  if (!scope || !(await can(actor, "task.read", scope))) return "No tasks visible from here.";
 
   const statusFilter =
     status === "active"
@@ -233,7 +265,7 @@ async function listTasks(
     .leftJoin(schema.nodes, eq(schema.tasks.nodeId, schema.nodes.id))
     .where(
       and(
-        eq(schema.projects.ownerUserId, actor.id),
+        ownedBy(schema.projects, scope),
         ...(effectiveProjectId ? [eq(schema.tasks.projectId, effectiveProjectId)] : []),
         ...(statusFilter ? [statusFilter] : []),
       ),
@@ -331,7 +363,14 @@ async function getTask(actor: Actor, args: z.infer<typeof GetTask>): Promise<str
     .join("\n");
 }
 
-async function searchHistory(actor: Actor, args: z.infer<typeof SearchHistory>): Promise<string> {
+async function searchHistory(
+  actor: Actor,
+  args: z.infer<typeof SearchHistory>,
+  context: ConductorContext,
+): Promise<string> {
+  const scope = await scopeFor(context, actor);
+  if (!scope || !(await can(actor, "task.read", scope))) return "Nothing visible from here.";
+
   const term = `%${args.query}%`;
 
   const rows = await db
@@ -344,12 +383,7 @@ async function searchHistory(actor: Actor, args: z.infer<typeof SearchHistory>):
     })
     .from(schema.tasks)
     .innerJoin(schema.projects, eq(schema.tasks.projectId, schema.projects.id))
-    .where(
-      and(
-        eq(schema.projects.ownerUserId, actor.id),
-        or(like(schema.tasks.title, term), like(schema.tasks.prompt, term)),
-      ),
-    )
+    .where(and(ownedBy(schema.projects, scope), or(like(schema.tasks.title, term), like(schema.tasks.prompt, term))))
     .orderBy(desc(schema.tasks.createdAt))
     .limit(args.limit ?? 15);
 
@@ -363,7 +397,14 @@ async function searchHistory(actor: Actor, args: z.infer<typeof SearchHistory>):
     .join("\n");
 }
 
-async function spendReport(actor: Actor, args: z.infer<typeof SpendReport>): Promise<string> {
+async function spendReport(
+  actor: Actor,
+  args: z.infer<typeof SpendReport>,
+  context: ConductorContext,
+): Promise<string> {
+  const scope = await scopeFor(context, actor);
+  if (!scope || !(await can(actor, "project.read", scope))) return "No spend visible from here.";
+
   const since = Date.now() - (args.sinceHours ?? 24) * 3600_000;
 
   const rows = await db
@@ -375,7 +416,7 @@ async function spendReport(actor: Actor, args: z.infer<typeof SpendReport>): Pro
     })
     .from(schema.tasks)
     .innerJoin(schema.projects, eq(schema.tasks.projectId, schema.projects.id))
-    .where(and(eq(schema.projects.ownerUserId, actor.id), gte(schema.tasks.createdAt, since)));
+    .where(and(ownedBy(schema.projects, scope), gte(schema.tasks.createdAt, since)));
 
   if (rows.length === 0) return `No tasks in the last ${args.sinceHours ?? 24} hours.`;
 
@@ -410,6 +451,15 @@ async function spendReport(actor: Actor, args: z.infer<typeof SpendReport>): Pro
   }\n${lines.join("\n")}${note}`;
 }
 
+/* Every owned table in this schema follows the same owner-column pair, so one
+   condition builder covers projects, tasks-via-projects and nodes alike. */
+function ownedBy<T extends { ownerUserId: SQLiteColumn; ownerOrgId: SQLiteColumn }>(
+  table: T,
+  scope: { ownerUserId?: string | null; ownerOrgId?: string | null },
+) {
+  return scope.ownerOrgId ? eq(table.ownerOrgId, scope.ownerOrgId) : eq(table.ownerUserId, scope.ownerUserId!);
+}
+
 /* The scope model lists and task dispatch resolve against: the project this
    conversation is about when there is one (which may be an org's, not the
    actor's own), otherwise the actor's personal scope. Resolved once so a
@@ -423,18 +473,47 @@ async function listModelLists(actor: Actor, context: ConductorContext): Promise<
   const scope = await scopeFor(context, actor);
   if (!scope || !(await can(actor, "provider.read", scope))) return "No model lists visible from here.";
 
-  const lists = await db
-    .select()
-    .from(schema.modelLists)
-    .where(
-      scope.ownerOrgId
-        ? eq(schema.modelLists.ownerOrgId, scope.ownerOrgId)
-        : eq(schema.modelLists.ownerUserId, scope.ownerUserId!),
-    );
+  const lists = await db.select().from(schema.modelLists).where(ownedBy(schema.modelLists, scope));
 
   if (lists.length === 0) return "No model lists set up yet.";
 
   return lists.map((l) => `${l.name} — ${l.description || "(no description)"}`).join("\n");
+}
+
+/* What the project has on record about itself. The Conductor cannot look at a
+   checkout — only a worker task on the machine holding it can — so this is
+   how it reads back what such a task registered, and how it answers "what do
+   we know about this project" without guessing. */
+async function projectKnowledge(
+  actor: Actor,
+  args: z.infer<typeof ProjectKnowledge>,
+  context: ConductorContext,
+): Promise<string> {
+  const projectId = args.projectId ?? context.projectId;
+  if (!projectId) return "No project — pass a projectId (use list_projects to find one).";
+
+  const scope = await projectScope(projectId);
+  if (!scope || !(await can(actor, "project.read", scope))) {
+    return "That project doesn't exist, or isn't yours.";
+  }
+
+  const knowledge = await getKnowledge(projectId);
+
+  const workspaces = knowledge.workspaces.length
+    ? knowledge.workspaces.map((w) => `  ${w.nodeName}: ${w.path}`).join("\n")
+    : "  (none recorded — no task has reported where this project lives)";
+
+  const notes = knowledge.notes.length
+    ? knowledge.notes
+        .map((n) => `  ${n.kind}${n.label ? ` ${n.label}` : ""}: ${n.value}${n.nodeName ? ` (on ${n.nodeName})` : ""}`)
+        .join("\n")
+    : "  (none recorded)";
+
+  return [
+    `brief: ${knowledge.brief || "(not set)"}`,
+    `checked out at:\n${workspaces}`,
+    `facts and notes:\n${notes}`,
+  ].join("\n");
 }
 
 async function createTaskTool(
@@ -461,9 +540,19 @@ async function createTaskTool(
     if ("error" in resolved) return resolved.error;
     model = resolved.modelId;
   }
+  /* Only when the Conductor did not choose for itself — an explicit model or
+     list it picked for this particular task is a deliberate decision, and a
+     standing pin should not silently override it. */
+  model = model ?? context.pinnedModel;
 
   try {
-    const created = await createTask(actor, { projectId, prompt: args.prompt, title: args.title, model });
+    const created = await createTask(actor, {
+      projectId,
+      prompt: args.prompt,
+      title: args.title,
+      model,
+      nodeId: context.pinnedNodeId,
+    });
     return `Dispatched [${created.taskId}] "${created.title}" to ${created.nodeName} on ${created.model}.`;
   } catch (err) {
     /* Never let a thrown error escape a tool call — every result here is a

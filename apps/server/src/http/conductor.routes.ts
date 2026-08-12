@@ -20,6 +20,10 @@ const Ask = z.object({
      its tools then default to that project rather than needing the model to
      be told or to ask which one. */
   projectId: z.string().optional(),
+  /* Whatever the user pinned by hand in the routing chips, so a dispatch the
+     Conductor makes without choosing a model of its own still honours it. */
+  pinnedModel: z.string().optional(),
+  pinnedNodeId: z.string().optional(),
 });
 
 conductorRoutes.post("/ask", async (c) => {
@@ -34,7 +38,11 @@ conductorRoutes.post("/ask", async (c) => {
       parsed.data.history ?? [],
       parsed.data.question,
       c.req.raw.signal,
-      { projectId: parsed.data.projectId },
+      {
+        projectId: parsed.data.projectId,
+        pinnedModel: parsed.data.pinnedModel,
+        pinnedNodeId: parsed.data.pinnedNodeId,
+      },
     );
 
     return c.json({

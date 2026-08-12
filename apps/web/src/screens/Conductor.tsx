@@ -25,11 +25,28 @@ interface ConductorProps {
      list_model_lists call defaults to. */
   projectId?: string;
   /* Trades the full-page header and copy for something that fits inside a
-     panel alongside a project's composer and task list. */
+     panel alongside a project's task list. */
   embedded?: boolean;
+  /* What the routing chips are pinned to, if anything. Passed through so a
+     dispatch the Conductor makes without naming a model of its own still
+     honours what the user picked by hand. */
+  pinnedModel?: string;
+  pinnedNodeId?: string;
+  /* Rendered between the composer and the thread — the routing chips live
+     here so the one input on the page keeps its routing controls. */
+  under?: React.ReactNode;
+  onDispatched?: () => void;
 }
 
-export function Conductor({ onOpenTask, projectId, embedded }: ConductorProps) {
+export function Conductor({
+  onOpenTask,
+  projectId,
+  embedded,
+  pinnedModel,
+  pinnedNodeId,
+  under,
+  onDispatched,
+}: ConductorProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
@@ -56,7 +73,11 @@ export function Conductor({ onOpenTask, projectId, embedded }: ConductorProps) {
 
     try {
       const history = messages.slice(-12).map((m) => ({ role: m.role, content: m.content }));
-      const answer = await api.askConductor(question, history, projectId);
+      const answer = await api.askConductor(question, history, {
+        projectId,
+        pinnedModel: pinnedModel || undefined,
+        pinnedNodeId: pinnedNodeId || undefined,
+      });
       setMessages((m) => [
         ...m,
         {
@@ -66,6 +87,10 @@ export function Conductor({ onOpenTask, projectId, embedded }: ConductorProps) {
           model: answer.model,
         },
       ]);
+
+      /* A turn that dispatched something changes the task list behind this
+         panel, so the page refreshes rather than waiting out its poll. */
+      if (answer.usedTools.some((t) => t.name === "create_task")) onDispatched?.();
     } catch (err) {
       setMessages((m) => [
         ...m,
@@ -80,8 +105,21 @@ export function Conductor({ onOpenTask, projectId, embedded }: ConductorProps) {
     }
   }
 
+  const composer = (
+    <Composer
+      chip={embedded ? undefined : "dispatches work"}
+      placeholder={embedded ? "What should the agent do?" : "Ask about everything"}
+      hints={
+        embedded
+          ? ["⏎ send", "the Conductor picks a model and dispatches the work"]
+          : ["⏎ send", "can dispatch tasks and pick a model list for them"]
+      }
+      onSend={(text) => void ask(text)}
+    />
+  );
+
   return (
-    <section className={embedded ? "flex flex-col bg-canvas border-t rule" : "flex-1 min-w-0 flex flex-col bg-canvas"}>
+    <section className={embedded ? "flex flex-col" : "flex-1 min-w-0 flex flex-col bg-canvas"}>
       {!embedded && (
         <header className="h-[46px] flex-none flex items-center gap-3 px-4 md:px-[26px] border-b rule overflow-x-auto scroll-quiet">
           <h1 className="font-display text-[14px] font-semibold whitespace-nowrap">Conductor</h1>
@@ -92,12 +130,14 @@ export function Conductor({ onOpenTask, projectId, embedded }: ConductorProps) {
           </span>
         </header>
       )}
+
+      {/* Embedded, this is the page's one input: it sits at the top where the
+          direct composer used to, with the routing chips under it, and the
+          conversation reads downward from there. */}
       {embedded && (
-        <div className="flex-none flex items-center gap-2 px-4 pt-4">
-          <span className="speaker">conductor</span>
-          <span className="hidden md:inline text-[12px] text-tertiary">
-            dispatches and checks on work in this project
-          </span>
+        <div className="flex flex-col gap-2.5">
+          {composer}
+          {under}
         </div>
       )}
 
@@ -105,19 +145,18 @@ export function Conductor({ onOpenTask, projectId, embedded }: ConductorProps) {
         ref={scroller}
         className={
           embedded
-            ? "max-h-[360px] min-h-[120px] overflow-auto scroll-quiet px-4 py-4 flex flex-col gap-[18px]"
+            ? "max-h-[420px] overflow-auto scroll-quiet flex flex-col gap-[18px] empty:hidden"
             : "flex-1 min-h-0 overflow-auto scroll-quiet px-4 md:px-[26px] py-5 flex flex-col gap-[18px]"
         }
       >
-        {messages.length === 0 && (
+        {messages.length === 0 && !embedded && (
           <div className="flex flex-col gap-4 max-w-[760px]">
             <p className="prose-msg">
-              {embedded
-                ? "Ask it to build something, check on a task, or pick a model list for the work."
-                : "Ask about anything across your projects — what is running, what needs you, what a task changed, where the tokens went."}
+              Ask about anything across your projects — what is running, what needs you, what a
+              task changed, where the tokens went.
             </p>
 
-            {!embedded && live.length > 0 && (
+            {live.length > 0 && (
               <div className="flex flex-col gap-1.5">
                 <div className="speaker">running now</div>
                 {live.map((task) => (
@@ -127,15 +166,12 @@ export function Conductor({ onOpenTask, projectId, embedded }: ConductorProps) {
             )}
 
             <div className="flex flex-wrap gap-1.5">
-              {(embedded
-                ? ["What's running?", "Is anything waiting on me?"]
-                : [
-                    "What's running?",
-                    "Is anything waiting on me?",
-                    "What did we ship today?",
-                    "Where did the tokens go?",
-                  ]
-              ).map((suggestion) => (
+              {[
+                "What's running?",
+                "Is anything waiting on me?",
+                "What did we ship today?",
+                "Where did the tokens go?",
+              ].map((suggestion) => (
                 <button
                   key={suggestion}
                   type="button"
@@ -197,14 +233,9 @@ export function Conductor({ onOpenTask, projectId, embedded }: ConductorProps) {
         )}
       </div>
 
-      <footer className={embedded ? "flex-none px-4 pt-2 pb-4" : "flex-none border-t rule px-4 md:px-[26px] pt-3 pb-3.5"}>
-        <Composer
-          chip="dispatches work"
-          placeholder={embedded ? "Ask it to build, fix, or check on something" : "Ask about everything"}
-          hints={["⏎ send", "can dispatch tasks and pick a model list for them"]}
-          onSend={(text) => void ask(text)}
-        />
-      </footer>
+      {!embedded && (
+        <footer className="flex-none border-t rule px-4 md:px-[26px] pt-3 pb-3.5">{composer}</footer>
+      )}
     </section>
   );
 }

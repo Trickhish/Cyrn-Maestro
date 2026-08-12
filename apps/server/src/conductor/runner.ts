@@ -1,4 +1,7 @@
+import { eq } from "drizzle-orm";
+import { db, schema } from "../db";
 import { resolveProvider } from "../providers/gateway";
+import { can, projectScope } from "../lib/permissions";
 import { conductorToolDefinitions, runConductorTool, type ConductorContext } from "./tools";
 import type { Actor } from "../lib/auth";
 import type { ChatMessage } from "../providers/types";
@@ -30,13 +33,46 @@ How to answer:
 Dispatching work:
 - Before choosing a model for create_task, call list_model_lists to see what profiles exist and what each is for — prefer naming a modelList that fits the task over picking a raw model yourself. Leave both unset to use the project's own default routing.
 - A task you just dispatched takes real time to run. Do not poll get_task for it in a tight loop within this reply — tell the user it is dispatched and that they can ask again shortly.
-- Before telling the user a dispatched task is done, call get_task and read what it actually did. If the work needs fixing, dispatch a follow-up create_task rather than trying to fix it yourself — you have no filesystem to fix it with.`;
+- Before telling the user a dispatched task is done, call get_task and read what it actually did. If the work needs fixing, dispatch a follow-up create_task rather than trying to fix it yourself — you have no filesystem to fix it with.
+
+Anything that needs looking at a machine is a task, not a question you answer yourself:
+- You cannot read a directory, open a file, or run a command. A worker task can, on the machine holding the checkout. So "look at the code in /some/path", "what does this project do", "find out how it is structured" are all create_task work — dispatch it, say you have, and read the result back with get_task afterwards.
+- Worker tasks can also write down what they find: they have tools to set the project's brief, register a fact (a directory, a URL, a port), and remember a note. When the user wants a project documented or its details filled in, dispatch a task that says explicitly what to inspect AND to record what it finds with those tools — a task that only reports back in its own transcript leaves the project knowing nothing.
+- project_knowledge reads that back. Check it before claiming a project has no brief or no known location, and again after a task was asked to fill it in, so you are reporting what was actually recorded rather than what you asked for.`;
 
 export interface ConductorTurn {
   text: string;
   toolCalls: Array<{ name: string; args: unknown; result: string }>;
   usage: { inputTokens: number; outputTokens: number };
   model: string;
+}
+
+/* Threading the project into the tools is not enough on its own: the tools
+   then default correctly, but the model has no idea which project it is
+   sitting on, so it asks the user "which one?" or calls list_projects for a
+   choice it was never meant to make. Naming it here is what makes the
+   embedded panel feel like it belongs to the project it is embedded in. */
+export async function whereWeAre(actor: Actor, context: ConductorContext): Promise<string> {
+  if (!context.projectId) return "";
+
+  const scope = await projectScope(context.projectId);
+  if (!scope || !(await can(actor, "project.read", scope))) return "";
+
+  const [project] = await db
+    .select({ name: schema.projects.name })
+    .from(schema.projects)
+    .where(eq(schema.projects.id, context.projectId))
+    .limit(1);
+  if (!project) return "";
+
+  const pinned = [
+    context.pinnedModel ? `the model ${context.pinnedModel}` : null,
+    context.pinnedNodeId ? "a specific machine" : null,
+  ].filter(Boolean);
+
+  return `\n\nThis conversation is about the project "${project.name}" (id ${context.projectId}). Every tool already defaults to it, so use them directly rather than asking the user which project they mean, and only pass a projectId when you genuinely mean a different one.${
+    pinned.length ? ` The user has pinned ${pinned.join(" and ")} for work dispatched from here; leave create_task's model and modelList unset to honour that.` : ""
+  }`;
 }
 
 export async function askConductor(
@@ -51,7 +87,7 @@ export async function askConductor(
   const provider = await resolveProvider({ ownerUserId: actor.id });
 
   const messages: ChatMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: SYSTEM_PROMPT + (await whereWeAre(actor, context)) },
     ...history.map((m) => ({ role: m.role, content: m.content }) as ChatMessage),
     { role: "user", content: question },
   ];
