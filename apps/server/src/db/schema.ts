@@ -392,6 +392,57 @@ export const routingRules = sqliteTable(
   ],
 );
 
+/* MCP servers configured for a project.
+ *
+ * Two placements, chosen by where the thing being reached lives:
+ *
+ *   server — remote HTTP, connected by the Maestro server. Credentials stay on
+ *   the server and a node never sees them. The default for anything SaaS.
+ *
+ *   node — a stdio process spawned on the machine, for things that need to be
+ *   on it: a database on a private network, a browser, an internal CLI.
+ *
+ * Either way the model sees one merged, namespaced tool list. */
+export const mcpServers = sqliteTable(
+  "mcp_servers",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    placement: text("placement", { enum: ["server", "node"] }).notNull(),
+    transport: text("transport", { enum: ["http", "stdio"] }).notNull(),
+
+    /* http */
+    url: text("url"),
+    /* Encrypted, write-only through the API, like every other credential. */
+    encryptedHeaders: text("encrypted_headers"),
+
+    /* stdio */
+    command: text("command"),
+    args: text("args", { mode: "json" }).$type<string[]>(),
+    encryptedEnv: text("encrypted_env"),
+
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    /* An MCP server can advertise forty tools and a project rarely wants all
+       forty in context. Empty means "all of them". */
+    toolAllowlist: text("tool_allowlist", { mode: "json" }).$type<string[]>().notNull().default([]),
+    /* Per-server default: auto runs freely, ask escalates, never refuses. */
+    approval: text("approval", { enum: ["auto", "ask", "never"] })
+      .notNull()
+      .default("ask"),
+
+    lastError: text("last_error"),
+    lastConnectedAt: integer("last_connected_at"),
+    createdAt: now(),
+  },
+  (t) => [
+    unique("mcp_project_name_unique").on(t.projectId, t.name),
+    index("mcp_project_idx").on(t.projectId),
+  ],
+);
+
 export const tasks = sqliteTable(
   "tasks",
   {

@@ -10,6 +10,7 @@ import { config } from "../config";
 import { append, conversationFrom } from "./events";
 import { resolveProvider, estimateCost, NoProviderError } from "../providers/gateway";
 import { streamWithFailover } from "./failover";
+import { resolveMcpTools, runMcpTool, isMcpTool } from "../mcp/registry";
 import { collectSkills, fetchSkillBody, skillsPromptSection, recordSkillProblems, LOAD_SKILL_TOOL, type SkillSummary } from "./skills";
 import { checkSpend } from "../router/spend";
 import { ProviderError } from "../providers/types";
@@ -180,6 +181,17 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
   const { skills, problems } = await collectSkills(taskId);
   recordSkillProblems(taskId, problems);
 
+  /* MCP tools are merged into the same list the node's tools live in, so the
+     model sees one surface rather than two categories it has to reason about. */
+  const mcp = await resolveMcpTools(task.projectId);
+  for (const problem of mcp.problems) {
+    append(taskId, {
+      kind: "log",
+      stream: "stderr",
+      chunk: `MCP server ${problem.server}: ${problem.message}\n`,
+    });
+  }
+
   const system = [SYSTEM_PROMPT, project.instructions, skillsPromptSection(skills)]
     .filter(Boolean)
     .join("\n\n");
@@ -230,7 +242,10 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
             messages,
             /* Offered only when there is something to load; a tool with nothing
                behind it is an invitation to hallucinate a skill name. */
-            extraTools: skills.length > 0 ? [LOAD_SKILL_TOOL as never] : [],
+            extraTools: [
+              ...(skills.length > 0 ? [LOAD_SKILL_TOOL as never] : []),
+              ...mcp.definitions,
+            ],
           },
           state.abort.signal,
         )) {
@@ -322,6 +337,8 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
 
         if (call.name === LOAD_SKILL_TOOL.name) {
           await loadSkillCall(taskId, task.nodeId!, call, skills);
+        } else if (isMcpTool(call.name) && mcp.tools.some((t) => t.qualifiedName === call.name)) {
+          await mcpCall(taskId, task.projectId, call, mcp.needsApproval, state);
         } else {
           await executeCall(taskId, task.nodeId!, call, state);
         }
@@ -390,6 +407,91 @@ async function loadSkillCall(
     output:
       body ??
       `The skill "${name}" could not be read from the workspace. Continue without it.`,
+  });
+}
+
+/* An MCP tool call. It runs on the server rather than the node, but it goes
+   through the same approval path as anything else — reaching a production
+   database over MCP deserves the prompt that `psql` would have got. */
+async function mcpCall(
+  taskId: string,
+  projectId: string,
+  call: { id: string; name: string; argumentsJson: string },
+  needsApproval: Set<string>,
+  state: RunState,
+): Promise<void> {
+  let args: unknown = {};
+  try {
+    args = JSON.parse(call.argumentsJson || "{}");
+  } catch {
+    append(taskId, {
+      kind: "tool_call",
+      callId: call.id,
+      tool: call.name,
+      args: {},
+      summary: call.name,
+    });
+    append(taskId, {
+      kind: "tool_result",
+      callId: call.id,
+      ok: false,
+      output: `The arguments for ${call.name} were not valid JSON. Send them again as a JSON object.`,
+    });
+    return;
+  }
+
+  const summary = `${call.name} ${JSON.stringify(args).slice(0, 120)}`;
+  append(taskId, { kind: "tool_call", callId: call.id, tool: call.name, args, summary });
+
+  if (needsApproval.has(call.name)) {
+    await db.insert(schema.approvals).values({
+      id: crypto.randomUUID(),
+      taskId,
+      callId: call.id,
+      tool: call.name,
+      summary,
+      reason: "mcp_tool",
+      approved: null,
+      decidedBy: null,
+      decidedAt: null,
+      requestedAt: Date.now(),
+    });
+
+    await db.update(schema.tasks).set({ status: "awaiting_approval" }).where(eq(schema.tasks.id, taskId));
+    append(taskId, {
+      kind: "approval_requested",
+      callId: call.id,
+      tool: call.name,
+      summary,
+      reason: "mcp_tool",
+    });
+    append(taskId, { kind: "status", status: "awaiting_approval" });
+
+    const allowed = await waitForDecision(call.id, state);
+
+    await db.update(schema.tasks).set({ status: "running" }).where(eq(schema.tasks.id, taskId));
+    append(taskId, { kind: "status", status: "running" });
+
+    if (!allowed) {
+      append(taskId, {
+        kind: "tool_result",
+        callId: call.id,
+        ok: false,
+        output: "The call was denied.",
+      });
+      return;
+    }
+  }
+
+  const started = Date.now();
+  const result = await runMcpTool(projectId, call.name, args);
+
+  append(taskId, {
+    kind: "tool_result",
+    callId: call.id,
+    ok: result.ok,
+    output: result.output,
+    durationMs: Date.now() - started,
   });
 }
 
