@@ -101,3 +101,12 @@ export const ServerIcon = (p: IconProps) => (
     <path d="M4.8 4.7h.01M4.8 11.3h.01M11.4 4.7h1.2M11.4 11.3h1.2" />
   </Svg>
 );
+
+/* Two figures: the organization is its people before it is anything else. */
+export const OrgIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="6" cy="5.2" r="2.3" />
+    <path d="M1.9 13.2c0-2.3 1.8-3.8 4.1-3.8s4.1 1.5 4.1 3.8" />
+    <path d="M10.7 3.3a2.3 2.3 0 0 1 0 4.4M11.6 9.7c1.6.4 2.6 1.7 2.6 3.5" />
+  </Svg>
+);

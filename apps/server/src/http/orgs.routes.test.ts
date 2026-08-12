@@ -300,3 +300,137 @@ describe("the audit log", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("organization settings", () => {
+  async function joinAs(email: string, role: string): Promise<string> {
+    const link = (
+      await body(
+        await app.request(
+          `/api/orgs/${orgId}/invitations`,
+          withCookie(ownerCookie, json({ email, role })),
+        ),
+      )
+    ).link;
+    const cookie = await account(email);
+    await app.request(
+      "/api/orgs/invitations/accept",
+      withCookie(cookie, json({ token: link.split("/invite/")[1] })),
+    );
+    return cookie;
+  }
+
+  const patch = (cookie: string, payload: unknown) =>
+    app.request(`/api/orgs/${orgId}`, {
+      method: "PATCH",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+  const read = (cookie: string) => app.request(`/api/orgs/${orgId}`, withCookie(cookie));
+
+  test("an owner reads the organization with its defaults", async () => {
+    const org = (await body(await read(ownerCookie))).organization;
+
+    expect(org.name).toBe("Acme");
+    expect(org.role).toBe("owner");
+    expect(org.defaultTier).toBeNull();
+    expect(org.permissions).toContain("org.settings");
+  });
+
+  test("an owner can rename it", async () => {
+    expect((await patch(ownerCookie, { name: "Acme Corp" })).status).toBe(200);
+    expect((await body(await read(ownerCookie))).organization.name).toBe("Acme Corp");
+  });
+
+  /* The slug is what stored references are built from. Renaming must not
+     silently move the organization out from under them. */
+  test("renaming leaves the slug alone", async () => {
+    await patch(ownerCookie, { name: "Something Else Entirely" });
+    expect((await body(await read(ownerCookie))).organization.slug).toBe("acme");
+  });
+
+  test("an owner can set the routing defaults every project inherits", async () => {
+    const res = await patch(ownerCookie, {
+      defaultTier: "heavy",
+      defaultModelId: "claude-opus-5",
+      spendCapUsd: 250,
+    });
+    expect(res.status).toBe(200);
+
+    const org = (await body(await read(ownerCookie))).organization;
+    expect(org.defaultTier).toBe("heavy");
+    expect(org.defaultModelId).toBe("claude-opus-5");
+    expect(org.spendCapUsd).toBe(250);
+  });
+
+  /* null is a value here, not an omission — it is the only way to go back to
+     letting the router decide. */
+  test("a default can be cleared again", async () => {
+    await patch(ownerCookie, { defaultTier: "heavy", spendCapUsd: 250 });
+    await patch(ownerCookie, { defaultTier: null, spendCapUsd: null });
+
+    const org = (await body(await read(ownerCookie))).organization;
+    expect(org.defaultTier).toBeNull();
+    expect(org.spendCapUsd).toBeNull();
+  });
+
+  test("omitting a field leaves it as it was", async () => {
+    await patch(ownerCookie, { defaultTier: "light", spendCapUsd: 10 });
+    await patch(ownerCookie, { name: "Renamed" });
+
+    const org = (await body(await read(ownerCookie))).organization;
+    expect(org.defaultTier).toBe("light");
+    expect(org.spendCapUsd).toBe(10);
+  });
+
+  test("an admin can change settings", async () => {
+    const adminCookie = await joinAs("admin@x.com", "admin");
+    expect((await patch(adminCookie, { defaultTier: "light" })).status).toBe(200);
+  });
+
+  test("a member can read the defaults but not change them", async () => {
+    const memberCookie = await joinAs("member@x.com", "member");
+
+    const org = (await body(await read(memberCookie))).organization;
+    expect(org.role).toBe("member");
+    expect(org.permissions).not.toContain("org.settings");
+
+    expect((await patch(memberCookie, { name: "Hijacked" })).status).toBe(404);
+    expect((await body(await read(ownerCookie))).organization.name).toBe("Acme");
+  });
+
+  test("a viewer cannot change settings either", async () => {
+    const viewerCookie = await joinAs("viewer@x.com", "viewer");
+    expect((await patch(viewerCookie, { defaultTier: "heavy" })).status).toBe(404);
+  });
+
+  test("a non-member can neither read nor change it", async () => {
+    const strangerCookie = await account("stranger@x.com");
+
+    expect((await read(strangerCookie)).status).toBe(404);
+    expect((await patch(strangerCookie, { name: "Mine now" })).status).toBe(404);
+  });
+
+  test("an unknown tier is refused", async () => {
+    expect((await patch(ownerCookie, { defaultTier: "enormous" })).status).toBe(400);
+  });
+
+  test("a negative spend cap is refused", async () => {
+    expect((await patch(ownerCookie, { spendCapUsd: -5 })).status).toBe(400);
+  });
+
+  /* A name of only spaces passes a bare min(1) and then trims to nothing,
+     which would leave the organization nameless everywhere it is shown. */
+  test("a name of only spaces is refused, not stored blank", async () => {
+    expect((await patch(ownerCookie, { name: "   " })).status).toBe(400);
+    expect((await body(await read(ownerCookie))).organization.name).toBe("Acme");
+  });
+
+  test("a settings change is recorded in the audit log", async () => {
+    await patch(ownerCookie, { defaultTier: "heavy" });
+
+    const entries = (await body(await app.request(`/api/orgs/${orgId}/audit`, withCookie(ownerCookie))))
+      .entries;
+    expect(entries.some((e: { action: string }) => e.action === "org.settings_changed")).toBe(true);
+  });
+});

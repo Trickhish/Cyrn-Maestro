@@ -86,6 +86,84 @@ orgRoutes.post("/", async (c) => {
   return c.json({ organization: { ...org, role: "owner", permissions: permissionsFor("owner") } }, 201);
 });
 
+/* One organization, with the defaults that sit at the outermost rung of the
+   override ladder. Any member may read them — knowing what the org would pick
+   is how a member understands why their task routed the way it did. */
+orgRoutes.get("/:id", async (c) => {
+  const actor = requireActor(c);
+  const orgId = c.req.param("id");
+  await assertCan(actor, "member.view", { ownerOrgId: orgId });
+
+  const [org] = await db
+    .select()
+    .from(schema.organizations)
+    .where(eq(schema.organizations.id, orgId))
+    .limit(1);
+  if (!org) throw new NotFound();
+
+  const role = await roleIn(actor.id, orgId);
+
+  return c.json({
+    organization: {
+      ...org,
+      role,
+      permissions: role ? permissionsFor(role) : [],
+    },
+  });
+});
+
+const OrgSettings = z.object({
+  /* Trimmed before it is measured, so a name of only spaces is rejected rather
+     than stored as an empty one. */
+  name: z.string().trim().min(1).max(80).optional(),
+  /* null is a value here, not an omission: it is how a default is cleared. */
+  defaultTier: z.enum(["heavy", "standard", "light"]).nullable().optional(),
+  defaultModelId: z.string().max(200).nullable().optional(),
+  spendCapUsd: z.number().positive().nullable().optional(),
+});
+
+orgRoutes.patch("/:id", async (c) => {
+  const actor = requireActor(c);
+  const orgId = c.req.param("id");
+  await assertCan(actor, "org.settings", { ownerOrgId: orgId });
+
+  const parsed = OrgSettings.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) {
+    throw new BadRequest("Check the form.", z.flattenError(parsed.error).fieldErrors);
+  }
+
+  const [org] = await db
+    .select()
+    .from(schema.organizations)
+    .where(eq(schema.organizations.id, orgId))
+    .limit(1);
+  if (!org) throw new NotFound();
+
+  const { name, defaultTier, defaultModelId, spendCapUsd } = parsed.data;
+
+  await db
+    .update(schema.organizations)
+    .set({
+      ...(name !== undefined ? { name: name.trim() } : {}),
+      ...(defaultTier !== undefined ? { defaultTier } : {}),
+      /* An empty string from a cleared field means the same as no default. */
+      ...(defaultModelId !== undefined ? { defaultModelId: defaultModelId || null } : {}),
+      ...(spendCapUsd !== undefined ? { spendCapUsd } : {}),
+    })
+    .where(eq(schema.organizations.id, orgId));
+
+  /* The slug is deliberately left alone. It is what links and stored
+     references are built from, so renaming must not break them. */
+  await record(orgId, actor, "org.settings_changed", orgId, {
+    ...(name !== undefined && name.trim() !== org.name ? { name: name.trim() } : {}),
+    ...(defaultTier !== undefined ? { defaultTier } : {}),
+    ...(defaultModelId !== undefined ? { defaultModelId: defaultModelId || null } : {}),
+    ...(spendCapUsd !== undefined ? { spendCapUsd } : {}),
+  });
+
+  return c.json({ ok: true });
+});
+
 /* ---------------------------------------------------------------- members */
 
 orgRoutes.get("/:id/members", async (c) => {

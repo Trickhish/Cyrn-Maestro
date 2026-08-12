@@ -9,6 +9,7 @@ import { LiveThread } from "./screens/LiveThread";
 import { Connections } from "./screens/Connections";
 import { Conductor } from "./screens/Conductor";
 import { Activity } from "./screens/Activity";
+import { OrgSettings } from "./screens/OrgSettings";
 import { Settings } from "./screens/Settings";
 import { InstanceSettings } from "./screens/InstanceSettings";
 
@@ -145,6 +146,23 @@ export default function App() {
       {view.name === "settings" && <Settings />}
 
       {view.name === "instance" && <InstanceSettings email={actor.email} />}
+
+      {view.name === "org" &&
+        (getActiveOrg() ? (
+          <OrgSettings
+            orgId={getActiveOrg()!}
+            actorId={actor.id}
+            /* A rename has to reach the switcher and the mobile bar, which sit
+               outside this screen and read from the org list. */
+            onChanged={() => void refresh()}
+          />
+        ) : (
+          <section className="flex-1 grid place-items-center bg-canvas">
+            <p className="text-[13px] text-faint">
+              Switch to an organization to see its settings.
+            </p>
+          </section>
+        ))}
 
       {view.name === "activity" && (
         <Activity org={organizations.find((o) => o.id === getActiveOrg())} />

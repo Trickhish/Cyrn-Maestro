@@ -8,6 +8,7 @@ import { api, ApiError, type Organization } from "../lib/api";
 
 const LABELS: Record<string, string> = {
   "org.created": "created the organization",
+  "org.settings_changed": "changed organization settings",
   "member.invited": "invited",
   "member.joined": "joined",
   "member.left": "left",

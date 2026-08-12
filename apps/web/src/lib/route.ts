@@ -17,6 +17,7 @@ export function viewFromHash(hash: string): View | undefined {
   }
   /* The old name, so links people already have keep working. */
   if (kind === "fleet") return { name: "connections", tab: "nodes" };
+  if (kind === "org") return { name: "org" };
   if (kind === "activity") return { name: "activity" };
   if (kind === "settings") return { name: "settings" };
   if (kind === "instance") return { name: "instance" };
@@ -33,6 +34,8 @@ export function hashFor(view: View): string {
       return "#/conductor";
     case "connections":
       return `#/connections/${view.tab ?? "nodes"}`;
+    case "org":
+      return "#/org";
     case "activity":
       return "#/activity";
     case "settings":

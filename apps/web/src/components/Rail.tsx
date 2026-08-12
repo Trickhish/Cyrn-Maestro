@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, type Actor, type Organization, type Project, type TaskSummary } from "../lib/api";
 import { OrgSwitcher } from "./OrgSwitcher";
-import { ConductorIcon, InboxIcon, FleetIcon, SettingsIcon, ThemeIcon, ActivityIcon, ServerIcon } from "./icons";
+import { ConductorIcon, InboxIcon, FleetIcon, SettingsIcon, ThemeIcon, ActivityIcon, ServerIcon, OrgIcon } from "./icons";
 
 /* The rail carries navigation, not counts.
  *
@@ -13,6 +13,7 @@ export type View =
   | { name: "task"; taskId: string }
   | { name: "conductor" }
   | { name: "connections"; tab?: "nodes" | "providers" | "mcp" }
+  | { name: "org" }
   | { name: "activity" }
   | { name: "settings" }
   | { name: "instance" };
@@ -105,6 +106,23 @@ export function Rail({
         activeOrgId={activeOrgId}
         personalLabel={actor.email.split("@")[0]}
       />
+
+      {/* Sits with the switcher because it is about the thing the switcher
+          selects. A personal account has no members, no roles and no shared
+          defaults, so there is nothing for this page to say. */}
+      {activeOrgId && (
+        <div className="flex flex-col gap-px px-2 pb-2 -mt-1">
+          <button
+            type="button"
+            className="rail-item"
+            data-active={view.name === "org"}
+            onClick={() => go({ name: "org" })}
+          >
+            <OrgIcon />
+            <span className="flex-1">Organization</span>
+          </button>
+        </div>
+      )}
 
       <div className="flex flex-col gap-px px-2">
         <button

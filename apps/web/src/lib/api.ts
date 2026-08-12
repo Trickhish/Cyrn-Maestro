@@ -171,6 +171,15 @@ export interface Organization {
   permissions: string[];
 }
 
+/* One organization read on its own, which carries the routing defaults the
+   list view has no use for. */
+export interface OrganizationDetail extends Organization {
+  defaultTier: "heavy" | "standard" | "light" | null;
+  defaultModelId: string | null;
+  spendCapUsd: number | null;
+  createdAt: number;
+}
+
 export interface McpServer {
   id: string;
   name: string;
@@ -261,6 +270,16 @@ export const api = {
 
   orgs: () => request<{ organizations: Organization[] }>("/orgs"),
   createOrg: (name: string) => post<{ organization: Organization }>("/orgs", { name }),
+  org: (orgId: string) => request<{ organization: OrganizationDetail }>(`/orgs/${orgId}`),
+  updateOrg: (orgId: string, body: Record<string, unknown>) =>
+    request<{ ok: true }>(`/orgs/${orgId}`, { method: "PATCH", body: JSON.stringify(body) }),
+  setMemberRole: (orgId: string, userId: string, role: string) =>
+    request<{ ok: true }>(`/orgs/${orgId}/members/${userId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ role }),
+    }),
+  removeMember: (orgId: string, userId: string) =>
+    request<{ ok: true }>(`/orgs/${orgId}/members/${userId}`, { method: "DELETE" }),
   members: (orgId: string) =>
     request<{
       members: Array<{ userId: string; email: string; role: string; since: number }>;
