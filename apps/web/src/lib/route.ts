@@ -10,6 +10,7 @@ export function viewFromHash(hash: string): View | undefined {
 
   if (kind === "t" && id) return { name: "task", taskId: id };
   if (kind === "p" && id) return { name: "project", projectId: id };
+  if (kind === "conductor") return { name: "conductor" };
   if (kind === "fleet") return { name: "fleet" };
   return undefined;
 }
@@ -20,6 +21,8 @@ export function hashFor(view: View): string {
       return `#/t/${view.taskId}`;
     case "project":
       return `#/p/${view.projectId}`;
+    case "conductor":
+      return "#/conductor";
     case "fleet":
       return "#/fleet";
   }

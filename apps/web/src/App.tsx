@@ -7,6 +7,7 @@ import { SignIn } from "./screens/SignIn";
 import { ProjectHome } from "./screens/ProjectHome";
 import { LiveThread } from "./screens/LiveThread";
 import { Fleet } from "./screens/Fleet";
+import { Conductor } from "./screens/Conductor";
 
 export default function App() {
   const [actor, setActor] = useState<Actor | null>(null);
@@ -100,6 +101,10 @@ export default function App() {
       />
 
       {view.name === "fleet" && <Fleet />}
+
+      {view.name === "conductor" && (
+        <Conductor onOpenTask={(taskId) => setView({ name: "task", taskId })} />
+      )}
 
       {view.name === "project" &&
         (project ? (

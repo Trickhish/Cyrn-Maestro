@@ -10,6 +10,7 @@ import { ConductorIcon, InboxIcon, FleetIcon, SettingsIcon, ThemeIcon } from "./
 export type View =
   | { name: "project"; projectId: string }
   | { name: "task"; taskId: string }
+  | { name: "conductor" }
   | { name: "fleet" };
 
 interface RailProps {
@@ -64,10 +65,15 @@ export function Rail({
       </div>
 
       <div className="flex flex-col gap-px px-2">
-        <button type="button" className="rail-item" disabled title="Lands in v0.2">
+        <button
+          type="button"
+          className="rail-item"
+          data-active={view.name === "conductor"}
+          data-accent="true"
+          onClick={() => onNavigate({ name: "conductor" })}
+        >
           <ConductorIcon />
           <span className="flex-1">Conductor</span>
-          <span className="font-mono text-[10px] text-fainter">soon</span>
         </button>
         <button
           type="button"
