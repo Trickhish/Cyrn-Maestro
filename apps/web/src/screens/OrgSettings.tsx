@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, type OrganizationDetail, type ProviderModel } from "../lib/api";
+import { CapCoverage } from "../components/CapCoverage";
 
 /* Organization settings.
  *
@@ -203,6 +204,8 @@ export function OrgSettings({
             }}
           />
         </Labelled>
+
+        <CapCoverage models={models} capSet={org.spendCapUsd != null} />
       </section>
 
       <section className="flex flex-col gap-3">

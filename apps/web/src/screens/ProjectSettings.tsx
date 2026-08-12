@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type Project, type ProviderModel, type RoutingRule } from "../lib/api";
+import { CapCoverage } from "../components/CapCoverage";
 
 /* Project settings: the middle rungs of the override ladder.
  *
@@ -86,6 +87,8 @@ export function ProjectSettings({ project, onChanged }: { project: Project; onCh
             }
           />
         </Labelled>
+
+        <CapCoverage models={models} capSet={project.spendCapUsd != null} />
       </section>
 
       <section className="flex flex-col gap-3">

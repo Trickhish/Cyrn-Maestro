@@ -147,6 +147,11 @@ export interface ProviderModel {
   tierSource: "inferred" | "manual";
   contextWindow: number | null;
   enabled: boolean;
+  /* USD per million tokens. Null means unpriced — which means it accrues no
+     spend, and so slips past every cap. */
+  priceInPerMTok: number | null;
+  priceOutPerMTok: number | null;
+  priceSource: "provider" | "inferred" | "manual" | null;
   probeOk: boolean | null;
   probeError: string | null;
 }
@@ -327,6 +332,15 @@ export const api = {
     request<{ ok: true }>(`/providers/${providerId}/models/${encodeURIComponent(modelId)}`, {
       method: "PATCH",
       body: JSON.stringify({ tier }),
+    }),
+  setModelPrice: (
+    providerId: string,
+    modelId: string,
+    price: { priceInPerMTok: number | null; priceOutPerMTok: number | null },
+  ) =>
+    request<{ ok: true }>(`/providers/${providerId}/models/${encodeURIComponent(modelId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(price),
     }),
   reclassifyModels: (providerId: string) =>
     post<{ reclassified: number }>(`/providers/${providerId}/models/reclassify`),

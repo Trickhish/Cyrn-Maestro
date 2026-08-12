@@ -1,16 +1,41 @@
 import { Hono } from "hono";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db";
 import { encryptSecret } from "../lib/crypto";
 import { adapterFor } from "../providers/gateway";
 import { inferTier } from "../router/weigh";
+import { inferPrice } from "../providers/pricing";
 import { ProviderError } from "../providers/types";
 import { BadRequest, NotFound, requireActor, activeScope, type Env } from "./context";
 import { assertCan, providerScope } from "../lib/permissions";
 import { record } from "../lib/audit";
 
 export const providerRoutes = new Hono<Env>();
+
+/* A model's price and where it came from.
+ *
+ * The provider's own number is authoritative when there is one. Almost none of
+ * them publish one on /v1/models, so the fallback is the name-based table —
+ * without it every task records $0 and every spend cap is decorative. */
+function priceFor(model: { id: string; priceInPerMTok?: number; priceOutPerMTok?: number }) {
+  if (model.priceInPerMTok != null || model.priceOutPerMTok != null) {
+    return {
+      priceInPerMTok: model.priceInPerMTok ?? null,
+      priceOutPerMTok: model.priceOutPerMTok ?? null,
+      priceSource: "provider" as const,
+    };
+  }
+
+  const guess = inferPrice(model.id);
+  return {
+    priceInPerMTok: guess?.inPerMTok ?? null,
+    priceOutPerMTok: guess?.outPerMTok ?? null,
+    /* Null source for an unknown model, so a later table improvement reaches
+       it — and so the UI can tell "unpriced" from "priced at zero". */
+    priceSource: guess ? ("inferred" as const) : null,
+  };
+}
 
 const CreateProvider = z.object({
   name: z.string().min(1).max(80),
@@ -60,6 +85,11 @@ providerRoutes.get("/", async (c) => {
           tierSource: schema.models.tierSource,
           contextWindow: schema.models.contextWindow,
           enabled: schema.models.enabled,
+          /* Surfaced so a cap can be shown as unenforceable when the models it
+             would govern have no price. */
+          priceInPerMTok: schema.models.priceInPerMTok,
+          priceOutPerMTok: schema.models.priceOutPerMTok,
+          priceSource: schema.models.priceSource,
           /* Surfaced so the UI can grey out a model and say why, rather than
              hiding it and leaving the user wondering where it went. */
           probeOk: schema.models.probeOk,
@@ -154,8 +184,10 @@ providerRoutes.post("/:id/refresh", async (c) => {
           tier: inferTier(model.id),
           tierSource: "inferred",
           contextWindow: model.contextWindow ?? null,
-          priceInPerMTok: model.priceInPerMTok ?? null,
-          priceOutPerMTok: model.priceOutPerMTok ?? null,
+          /* A price the provider published wins; otherwise the name is used,
+             because a model with no price accrues no spend and slips past
+             every cap. */
+          ...priceFor(model),
           enabled: true,
         })
         .onConflictDoNothing();
@@ -220,6 +252,24 @@ providerRoutes.post("/:id/refresh", async (c) => {
               eq(schema.models.providerId, row.id),
               eq(schema.models.modelId, model.id),
               eq(schema.models.tierSource, "inferred"),
+            ),
+          );
+
+        /* Same rule for prices, and for the same reason: a hand-set price is
+           the real one, and a refresh must not overwrite it. Rows with no
+           source at all predate the price table and are treated as guesses. */
+        const priced = priceFor(model);
+        await db
+          .update(schema.models)
+          .set(priced)
+          .where(
+            and(
+              eq(schema.models.providerId, row.id),
+              eq(schema.models.modelId, model.id),
+              or(
+                isNull(schema.models.priceSource),
+                eq(schema.models.priceSource, "inferred"),
+              ),
             ),
           );
       }
@@ -305,15 +355,34 @@ providerRoutes.patch("/:id/models/:modelId", async (c) => {
     .object({
       tier: z.enum(["light", "standard", "heavy"]).optional(),
       enabled: z.boolean().optional(),
+      /* Null clears a price back to unpriced. Zero is a real value — a model
+         served from your own hardware genuinely costs nothing per token — so
+         the two cannot be collapsed. */
+      priceInPerMTok: z.number().min(0).max(10_000).nullable().optional(),
+      priceOutPerMTok: z.number().min(0).max(10_000).nullable().optional(),
     })
     .safeParse(await c.req.json().catch(() => ({})));
-  if (!parsed.success) throw new BadRequest("Pick a tier.");
+  if (!parsed.success) throw new BadRequest("Check the values.");
+
+  const pricing =
+    parsed.data.priceInPerMTok !== undefined || parsed.data.priceOutPerMTok !== undefined
+      ? {
+          ...(parsed.data.priceInPerMTok !== undefined
+            ? { priceInPerMTok: parsed.data.priceInPerMTok }
+            : {}),
+          ...(parsed.data.priceOutPerMTok !== undefined
+            ? { priceOutPerMTok: parsed.data.priceOutPerMTok }
+            : {}),
+          priceSource: "manual" as const,
+        }
+      : {};
 
   const updated = await db
     .update(schema.models)
     .set({
       ...(parsed.data.tier ? { tier: parsed.data.tier, tierSource: "manual" as const } : {}),
       ...(parsed.data.enabled !== undefined ? { enabled: parsed.data.enabled } : {}),
+      ...pricing,
     })
     .where(
       and(
@@ -326,7 +395,10 @@ providerRoutes.patch("/:id/models/:modelId", async (c) => {
   if (updated.length === 0) throw new NotFound();
 
   await record(scope.ownerOrgId ?? null, actor, "model.tier_changed", c.req.param("modelId"), {
-    tier: parsed.data.tier,
+    ...(parsed.data.tier ? { tier: parsed.data.tier } : {}),
+    ...(Object.keys(pricing).length
+      ? { priceIn: parsed.data.priceInPerMTok, priceOut: parsed.data.priceOutPerMTok }
+      : {}),
   });
 
   return c.json({ ok: true });
@@ -345,9 +417,16 @@ providerRoutes.post("/:id/models/reclassify", async (c) => {
     .where(eq(schema.models.providerId, c.req.param("id")));
 
   for (const row of rows) {
+    const guess = inferPrice(row.modelId);
     await db
       .update(schema.models)
-      .set({ tier: inferTier(row.modelId), tierSource: "inferred" })
+      .set({
+        tier: inferTier(row.modelId),
+        tierSource: "inferred",
+        priceInPerMTok: guess?.inPerMTok ?? null,
+        priceOutPerMTok: guess?.outPerMTok ?? null,
+        priceSource: guess ? "inferred" : null,
+      })
       .where(
         and(
           eq(schema.models.providerId, c.req.param("id")),

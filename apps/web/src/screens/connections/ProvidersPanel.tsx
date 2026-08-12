@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { api, ApiError, type Provider } from "../../lib/api";
+import { api, ApiError, type Provider, type ProviderModel } from "../../lib/api";
 
 /* Where model inference comes from, and how each model is classified.
  *
@@ -38,6 +38,11 @@ export function ProvidersPanel({
 
       {providers.map((provider) => {
         const usable = provider.models.filter((m) => m.probeOk !== false).length;
+        /* Counted because it is the difference between a spend cap that works
+           and one that is decorative. */
+        const unpriced = provider.models.filter(
+          (m) => m.probeOk !== false && m.priceInPerMTok == null && m.priceOutPerMTok == null,
+        ).length;
         return (
           <div key={provider.id} className="flex flex-col gap-2 border rule rounded-lg px-3 py-2.5 bg-raised">
             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
@@ -48,6 +53,14 @@ export function ProvidersPanel({
               <span className="font-mono text-[10.5px] text-tertiary tnum">
                 {usable}/{provider.models.length} usable
               </span>
+              {unpriced > 0 && (
+                <span
+                  className="font-mono text-[10.5px] text-warn-hi tnum"
+                  title="An unpriced model records no cost, so spend caps cannot see it."
+                >
+                  {unpriced} unpriced
+                </span>
+              )}
               <button
                 type="button"
                 className="btn btn-chip"
@@ -69,7 +82,7 @@ export function ProvidersPanel({
             <div className="flex flex-col gap-1">
               <div className="flex items-center gap-2">
                 <span className="font-mono text-[10px] tracking-[0.12em] uppercase text-faint">
-                  models and tiers
+                  models, tiers and prices
                 </span>
                 <span className="flex-1" />
                 <button
@@ -85,36 +98,12 @@ export function ProvidersPanel({
               </div>
 
               {provider.models.map((model) => (
-                <div
+                <ModelRow
                   key={model.id}
-                  className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-surface"
-                  title={model.probeError ?? undefined}
-                >
-                  <span
-                    className={`font-mono text-[11px] flex-1 truncate ${
-                      model.probeOk === false ? "text-faint line-through" : "text-secondary"
-                    }`}
-                  >
-                    {model.modelId}
-                  </span>
-
-                  {model.tierSource === "manual" && (
-                    <span className="font-mono text-[9px] text-accent-hi">set by hand</span>
-                  )}
-
-                  <select
-                    value={model.tier}
-                    onChange={async (e) => {
-                      await api.setModelTier(provider.id, model.modelId, e.target.value);
-                      onChanged();
-                    }}
-                    className="bg-surface border rule rounded px-1.5 py-0.5 font-mono text-[10.5px] text-secondary outline-none"
-                  >
-                    <option value="light">light</option>
-                    <option value="standard">standard</option>
-                    <option value="heavy">heavy</option>
-                  </select>
-                </div>
+                  providerId={provider.id}
+                  model={model}
+                  onChanged={onChanged}
+                />
               ))}
             </div>
           </div>
@@ -122,6 +111,163 @@ export function ProvidersPanel({
       })}
     </div>
   );
+}
+
+/* One model: its tier, and what it costs.
+ *
+ * Prices are editable because the built-in table is published list pricing and
+ * will drift, and because whoever pays the bill knows their own rate — a
+ * negotiated contract, a self-hosted model that costs nothing per token, a
+ * proxy that marks up. An unpriced model is called out rather than shown as
+ * free, since it records no cost and therefore slips past every spend cap. */
+function ModelRow({
+  providerId,
+  model,
+  onChanged,
+}: {
+  providerId: string;
+  model: ProviderModel;
+  onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const unpriced = model.priceInPerMTok == null && model.priceOutPerMTok == null;
+
+  async function savePrice(inPrice: string, outPrice: string) {
+    const parse = (raw: string) => {
+      const trimmed = raw.trim();
+      if (trimmed === "") return null;
+      const value = Number(trimmed);
+      return Number.isFinite(value) && value >= 0 ? value : null;
+    };
+    await api.setModelPrice(providerId, model.modelId, {
+      priceInPerMTok: parse(inPrice),
+      priceOutPerMTok: parse(outPrice),
+    });
+    setEditing(false);
+    onChanged();
+  }
+
+  return (
+    <div className="flex flex-col gap-1 rounded px-1.5 py-1 hover:bg-surface">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span
+          className={`font-mono text-[11px] flex-1 min-w-[140px] truncate ${
+            model.probeOk === false ? "text-faint line-through" : "text-secondary"
+          }`}
+          title={model.probeError ?? undefined}
+        >
+          {model.modelId}
+        </span>
+
+        {model.tierSource === "manual" && (
+          <span className="font-mono text-[9px] text-accent-hi">tier by hand</span>
+        )}
+
+        <button
+          type="button"
+          className={`font-mono text-[10px] tnum px-1.5 py-0.5 rounded hover:bg-raised ${
+            unpriced ? "text-warn-hi" : "text-faint"
+          }`}
+          onClick={() => setEditing(!editing)}
+          title={
+            unpriced
+              ? "No price, so this model records no cost and spend caps cannot see it. Click to set one."
+              : `${model.priceSource === "manual" ? "Set by hand" : "Published list price"}. Click to change.`
+          }
+        >
+          {unpriced
+            ? "unpriced"
+            : `$${fmt(model.priceInPerMTok)} / $${fmt(model.priceOutPerMTok)}`}
+        </button>
+
+        <select
+          value={model.tier}
+          onChange={async (e) => {
+            await api.setModelTier(providerId, model.modelId, e.target.value);
+            onChanged();
+          }}
+          className="bg-surface border rule rounded px-1.5 py-0.5 font-mono text-[10.5px] text-secondary outline-none"
+        >
+          <option value="light">light</option>
+          <option value="standard">standard</option>
+          <option value="heavy">heavy</option>
+        </select>
+      </div>
+
+      {editing && <PriceEditor model={model} onSave={savePrice} onCancel={() => setEditing(false)} />}
+    </div>
+  );
+}
+
+function PriceEditor({
+  model,
+  onSave,
+  onCancel,
+}: {
+  model: ProviderModel;
+  onSave: (inPrice: string, outPrice: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [inPrice, setInPrice] = useState(model.priceInPerMTok?.toString() ?? "");
+  const [outPrice, setOutPrice] = useState(model.priceOutPerMTok?.toString() ?? "");
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <div className="flex flex-wrap items-end gap-2 border-l-2 border-[var(--border-accent)] pl-2.5 py-1">
+      <label className="flex flex-col gap-0.5">
+        <span className="font-mono text-[9px] tracking-[0.1em] uppercase text-faint">
+          input $/M
+        </span>
+        <input
+          className="w-[92px] bg-canvas border rule-default rounded px-2 py-1 font-mono text-[11px] outline-none focus:border-[var(--border-accent)]"
+          value={inPrice}
+          inputMode="decimal"
+          placeholder="unpriced"
+          onChange={(e) => setInPrice(e.target.value)}
+        />
+      </label>
+      <label className="flex flex-col gap-0.5">
+        <span className="font-mono text-[9px] tracking-[0.1em] uppercase text-faint">
+          output $/M
+        </span>
+        <input
+          className="w-[92px] bg-canvas border rule-default rounded px-2 py-1 font-mono text-[11px] outline-none focus:border-[var(--border-accent)]"
+          value={outPrice}
+          inputMode="decimal"
+          placeholder="unpriced"
+          onChange={(e) => setOutPrice(e.target.value)}
+        />
+      </label>
+      <button
+        type="button"
+        className="btn btn-chip"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await onSave(inPrice, outPrice);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        Save
+      </button>
+      <button type="button" className="btn btn-chip" onClick={onCancel}>
+        Cancel
+      </button>
+      <span className="text-[10.5px] text-faint leading-snug">
+        USD per million tokens. Leave blank for unpriced.
+      </span>
+    </div>
+  );
+}
+
+/* Sub-dollar prices need more than two places, whole ones need fewer. */
+function fmt(value: number | null): string {
+  if (value == null) return "—";
+  if (value === 0) return "0";
+  return value < 1 ? value.toFixed(2).replace(/0$/, "") : String(value);
 }
 
 function AddProvider({ onAdded }: { onAdded: () => void }) {

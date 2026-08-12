@@ -64,6 +64,13 @@
       "when": 1786523295013,
       "tag": "0008_mcp_owner_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1786539169180,
+      "tag": "0009_model_price_source",
+      "breakpoints": true
     }
   ]
 }

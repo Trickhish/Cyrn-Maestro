@@ -3,6 +3,7 @@ import { config } from "./config";
 import { handleNodeMessage, handleDisconnect, type SocketSession } from "./nodes/registry";
 
 import { recoverOrphanedTasks } from "./tasks/recovery";
+import { backfillModelPrices } from "./providers/backfill";
 
 /* Fail at boot rather than at the first request that needs a key. */
 config.secretKey();
@@ -13,6 +14,14 @@ config.secretKey();
 const recovered = await recoverOrphanedTasks();
 if (recovered > 0) {
   console.log(`recovered        ${recovered} task${recovered === 1 ? "" : "s"} orphaned by a restart`);
+}
+
+/* Models stored before there was a price table record no cost, which makes
+   every spend cap over them decorative. Priced here so an existing instance is
+   protected without anyone having to know to press Refresh. */
+const priced = await backfillModelPrices();
+if (priced > 0) {
+  console.log(`priced           ${priced} model${priced === 1 ? "" : "s"} from the price table`);
 }
 
 /* Node sockets are handled by Bun directly rather than through Hono: the

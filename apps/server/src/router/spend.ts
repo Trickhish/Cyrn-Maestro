@@ -107,10 +107,9 @@ async function spentByOrg(orgId: string): Promise<number> {
   return Number(row?.total ?? 0);
 }
 
-/* A cap only means anything where the provider publishes prices. This provider
-   does not, so every task costs a recorded zero — enforcing against that would
-   be enforcing against nothing, and a cap the user believes is protecting them
+/* A cap only means anything where prices are known: an unpriced model records a
+   cost of zero, so tasks on it accrue nothing and run straight past the cap.
+   Prices are therefore inferred from the model name when a provider publishes
+   none (providers/pricing.ts), and any model still left unpriced is reported
+   next to the cap field itself — a cap someone believes is protecting them
    while it silently is not is worse than no cap at all. */
-export function capIsMeaningful(spent: number, anyPricedModel: boolean): boolean {
-  return anyPricedModel || spent > 0;
-}

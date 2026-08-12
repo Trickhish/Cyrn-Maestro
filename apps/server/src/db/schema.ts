@@ -239,10 +239,15 @@ export const models = sqliteTable(
       .notNull()
       .default("inferred"),
     contextWindow: integer("context_window"),
-    /* USD per million tokens. Null when the provider does not publish a price
-       — the UI says "unpriced" rather than quietly showing $0.00. */
+    /* USD per million tokens. Null when neither the provider nor the price
+       table knows one — the UI says "unpriced" rather than quietly showing
+       $0.00, because an unpriced model accrues no spend and so slips past
+       every cap. */
     priceInPerMTok: real("price_in_per_mtok"),
     priceOutPerMTok: real("price_out_per_mtok"),
+    /* Same reasoning as tierSource: a price corrected by hand must survive a
+       refresh, or published-price drift silently overwrites the real number. */
+    priceSource: text("price_source", { enum: ["provider", "inferred", "manual"] }),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
     /* A provider's model list over-advertises: it names models it cannot route,
        and models that need parameters it does not send by default. Probing
