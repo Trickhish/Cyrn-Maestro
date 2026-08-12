@@ -229,7 +229,10 @@ export interface McpServer {
 
 export interface ModelListEntry {
   id: string;
-  modelId: string;
+  /* Exactly one of these two is set. */
+  modelId: string | null;
+  groupId: string | null;
+  groupName: string | null;
 }
 
 export interface ModelList {
@@ -238,6 +241,21 @@ export interface ModelList {
   description: string | null;
   createdAt: number;
   entries: ModelListEntry[];
+}
+
+export interface ModelGroupMember {
+  id: string;
+  modelId: string;
+}
+
+/* One alias standing in for several ids of the same underlying model — a
+   dated snapshot, a routing alias, a per-vendor rename. Members are tried in
+   the group's own order. */
+export interface ModelGroup {
+  id: string;
+  name: string;
+  createdAt: number;
+  members: ModelGroupMember[];
 }
 
 export interface GatewayService {
@@ -277,14 +295,29 @@ export const api = {
   updateModelList: (id: string, body: { name?: string; description?: string | null }) =>
     request<{ ok: true }>(`/model-lists/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteModelList: (id: string) => request<{ ok: true }>(`/model-lists/${id}`, { method: "DELETE" }),
-  addModelListEntry: (listId: string, modelId: string) =>
-    post<{ id: string }>(`/model-lists/${listId}/entries`, { modelId }),
+  addModelListEntry: (listId: string, entry: { modelId: string } | { groupId: string }) =>
+    post<{ id: string }>(`/model-lists/${listId}/entries`, entry),
   removeModelListEntry: (listId: string, entryId: string) =>
     request<{ ok: true }>(`/model-lists/${listId}/entries/${entryId}`, { method: "DELETE" }),
   reorderModelList: (listId: string, entryIds: string[]) =>
     request<{ ok: true }>(`/model-lists/${listId}/order`, {
       method: "PUT",
       body: JSON.stringify({ entryIds }),
+    }),
+
+  modelGroups: () => request<{ groups: ModelGroup[] }>("/model-groups"),
+  createModelGroup: (name: string) => post<{ group: ModelGroup }>("/model-groups", { name }),
+  renameModelGroup: (id: string, name: string) =>
+    request<{ ok: true }>(`/model-groups/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  deleteModelGroup: (id: string) => request<{ ok: true }>(`/model-groups/${id}`, { method: "DELETE" }),
+  addModelGroupMember: (groupId: string, modelId: string) =>
+    post<{ id: string }>(`/model-groups/${groupId}/members`, { modelId }),
+  removeModelGroupMember: (groupId: string, memberId: string) =>
+    request<{ ok: true }>(`/model-groups/${groupId}/members/${memberId}`, { method: "DELETE" }),
+  reorderModelGroup: (groupId: string, memberIds: string[]) =>
+    request<{ ok: true }>(`/model-groups/${groupId}/order`, {
+      method: "PUT",
+      body: JSON.stringify({ memberIds }),
     }),
 
   account: () =>

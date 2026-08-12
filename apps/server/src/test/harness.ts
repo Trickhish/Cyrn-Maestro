@@ -44,6 +44,8 @@ export function resetDatabase(): void {
     "project_notes",
     "model_list_entries",
     "model_lists",
+    "model_group_members",
+    "model_groups",
     "mcp_servers",
     "models",
     "provider_connections",

@@ -298,6 +298,46 @@ export const modelLists = sqliteTable(
   ],
 );
 
+/* Many providers and proxies re-publish the same underlying model under a
+ * different id — a dated snapshot, a routing alias, a per-vendor rename.
+ * "Claude Opus" can easily be a dozen ids across a real fleet. A group is a
+ * name for that: one alias standing in for whichever of its members actually
+ * resolves, tried in the group's own order (cost, usually, is why they are
+ * not interchangeable) — so a list is built from "Claude Opus" once rather
+ * than every variant of it individually. */
+export const modelGroups = sqliteTable(
+  "model_groups",
+  {
+    id: id(),
+    ownerUserId: text("owner_user_id").references(() => users.id, { onDelete: "cascade" }),
+    ownerOrgId: text("owner_org_id").references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    createdAt: now(),
+  },
+  (t) => [
+    unique("model_groups_user_name_unique").on(t.ownerUserId, t.name),
+    unique("model_groups_org_name_unique").on(t.ownerOrgId, t.name),
+    index("model_groups_org_idx").on(t.ownerOrgId),
+  ],
+);
+
+export const modelGroupMembers = sqliteTable(
+  "model_group_members",
+  {
+    id: id(),
+    groupId: text("group_id")
+      .notNull()
+      .references(() => modelGroups.id, { onDelete: "cascade" }),
+    modelId: text("model_id").notNull(),
+    position: integer("position").notNull(),
+    createdAt: now(),
+  },
+  (t) => [
+    unique("model_group_members_unique").on(t.groupId, t.modelId),
+    index("model_group_members_group_idx").on(t.groupId),
+  ],
+);
+
 export const modelListEntries = sqliteTable(
   "model_list_entries",
   {
@@ -305,7 +345,12 @@ export const modelListEntries = sqliteTable(
     listId: text("list_id")
       .notNull()
       .references(() => modelLists.id, { onDelete: "cascade" }),
-    modelId: text("model_id").notNull(),
+    /* Exactly one of these two is set, enforced in the route rather than a
+       DB constraint — the same XOR-by-convention the owner columns already
+       use throughout this schema. A plain entry names one model; a group
+       entry stands in for whichever of the group's own members is available. */
+    modelId: text("model_id"),
+    groupId: text("group_id").references(() => modelGroups.id, { onDelete: "cascade" }),
     /* Preference order, lowest first. An explicit column rather than row
        order because SQL never promises to hand rows back in insertion order —
        relying on that is how a list quietly reshuffles itself one day. */
@@ -313,7 +358,8 @@ export const modelListEntries = sqliteTable(
     createdAt: now(),
   },
   (t) => [
-    unique("model_list_entries_unique").on(t.listId, t.modelId),
+    unique("model_list_entries_model_unique").on(t.listId, t.modelId),
+    unique("model_list_entries_group_unique").on(t.listId, t.groupId),
     index("model_list_entries_list_idx").on(t.listId),
   ],
 );

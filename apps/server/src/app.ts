@@ -12,6 +12,7 @@ import { ruleRoutes } from "./http/rules.routes";
 import { mcpRoutes } from "./http/mcp.routes";
 import { knowledgeRoutes } from "./http/knowledge.routes";
 import { modelListRoutes } from "./http/model-lists.routes";
+import { modelGroupRoutes } from "./http/model-groups.routes";
 import { installScript, daemonBundle } from "./http/install";
 import { errorResponse, withActor, type Env } from "./http/context";
 import { serveStatic } from "./http/static";
@@ -39,6 +40,7 @@ app.route("/api/rules", ruleRoutes);
 app.route("/api/mcp", mcpRoutes);
 app.route("/api/knowledge", knowledgeRoutes);
 app.route("/api/model-lists", modelListRoutes);
+app.route("/api/model-groups", modelGroupRoutes);
 
 /* The one-command install. The token is the path segment, so the script comes
    back already carrying the origin and the token — no editing, no copy-paste

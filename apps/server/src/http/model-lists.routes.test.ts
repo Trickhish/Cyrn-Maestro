@@ -83,6 +83,18 @@ const destroy = (cookie: string, id: string) =>
 const addEntry = (cookie: string, listId: string, modelId: string) =>
   app.request(`/api/model-lists/${listId}/entries`, withCookie(cookie, jsonPost({ modelId })));
 
+const addGroupEntry = (cookie: string, listId: string, groupId: string) =>
+  app.request(`/api/model-lists/${listId}/entries`, withCookie(cookie, jsonPost({ groupId })));
+
+async function createGroup(cookie: string, name: string, ...modelIds: string[]) {
+  const res = await app.request("/api/model-groups", withCookie(cookie, jsonPost({ name })));
+  const id = (await body(res)).group.id as string;
+  for (const modelId of modelIds) {
+    await app.request(`/api/model-groups/${id}/members`, withCookie(cookie, jsonPost({ modelId })));
+  }
+  return id;
+}
+
 const removeEntry = (cookie: string, listId: string, entryId: string) =>
   app.request(`/api/model-lists/${listId}/entries/${entryId}`, withCookie(cookie, { method: "DELETE" }));
 
@@ -232,6 +244,76 @@ describe("entries", () => {
 
     expect((await removeEntry(ownerCookie, "some-other-list", entryId)).status).toBe(404);
     expect((await body(await get(ownerCookie))).lists[0].entries).toHaveLength(1);
+  });
+});
+
+describe("group entries", () => {
+  test("a group can be added alongside plain models", async () => {
+    const listId = await createList();
+    const groupId = await createGroup(ownerCookie, "claude opus", "claude-opus-4-5");
+
+    await addEntry(ownerCookie, listId, "claude-haiku-4-5");
+    const res = await addGroupEntry(ownerCookie, listId, groupId);
+    expect(res.status).toBe(201);
+
+    const { entries } = (await body(await get(ownerCookie))).lists[0];
+    expect(entries).toHaveLength(2);
+    expect(entries[1]).toMatchObject({ groupId, groupName: "claude opus", modelId: null });
+  });
+
+  test("refuses a group that does not exist", async () => {
+    const listId = await createList();
+    expect((await addGroupEntry(ownerCookie, listId, "no-such-group")).status).toBe(404);
+  });
+
+  test("refuses a group belonging to someone else", async () => {
+    await db.insert(schema.users).values({
+      id: crypto.randomUUID(),
+      email: "outsider@example.com",
+      passwordHash: await hashPassword(PASSWORD),
+      instanceRole: "user",
+      status: "active",
+      createdAt: Date.now(),
+    });
+    const strangerCookie = cookieFrom(
+      await app.request("/api/auth/login", jsonPost({ email: "outsider@example.com", password: PASSWORD })),
+    );
+    const strangersGroup = await createGroup(strangerCookie, "not yours");
+
+    const listId = await createList();
+    expect((await addGroupEntry(ownerCookie, listId, strangersGroup)).status).toBe(404);
+  });
+
+  test("refuses both a model and a group on the same call", async () => {
+    const listId = await createList();
+    const groupId = await createGroup(ownerCookie, "claude opus");
+    const res = await app.request(
+      `/api/model-lists/${listId}/entries`,
+      withCookie(ownerCookie, jsonPost({ modelId: "claude-opus-4-5", groupId })),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test("refuses neither a model nor a group", async () => {
+    const listId = await createList();
+    expect((await addGroupEntry(ownerCookie, listId, "")).status).toBe(400);
+  });
+
+  test("refuses the same group twice", async () => {
+    const listId = await createList();
+    const groupId = await createGroup(ownerCookie, "claude opus");
+    await addGroupEntry(ownerCookie, listId, groupId);
+    const res = await addGroupEntry(ownerCookie, listId, groupId);
+    expect(res.status).toBe(400);
+  });
+
+  test("a group and a plain entry of the same underlying model can coexist", async () => {
+    /* Odd but not contradictory — the group is an alias, not a claim over the
+       id, so nothing stops both from being listed at once. */
+    const listId = await createList();
+    const groupId = await createGroup(ownerCookie, "claude opus", "claude-opus-4-5");
+    await addEntry(ownerCookie, listId, "claude-opus-4-5");
+    expect((await addGroupEntry(ownerCookie, listId, groupId)).status).toBe(201);
   });
 });
 

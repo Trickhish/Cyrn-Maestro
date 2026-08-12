@@ -16,7 +16,7 @@ function ownedBy(scope: { ownerUserId?: string | null; ownerOrgId?: string | nul
 
 async function withEntries(listId: string) {
   return db
-    .select({ id: schema.modelListEntries.id, modelId: schema.modelListEntries.modelId })
+    .select({ id: schema.modelListEntries.id })
     .from(schema.modelListEntries)
     .where(eq(schema.modelListEntries.listId, listId))
     .orderBy(asc(schema.modelListEntries.position));
@@ -52,8 +52,11 @@ modelListRoutes.get("/", async (c) => {
           id: schema.modelListEntries.id,
           listId: schema.modelListEntries.listId,
           modelId: schema.modelListEntries.modelId,
+          groupId: schema.modelListEntries.groupId,
+          groupName: schema.modelGroups.name,
         })
         .from(schema.modelListEntries)
+        .leftJoin(schema.modelGroups, eq(schema.modelListEntries.groupId, schema.modelGroups.id))
         .where(
           inArray(
             schema.modelListEntries.listId,
@@ -69,7 +72,14 @@ modelListRoutes.get("/", async (c) => {
       name: list.name,
       description: list.description,
       createdAt: list.createdAt,
-      entries: entries.filter((e) => e.listId === list.id).map((e) => ({ id: e.id, modelId: e.modelId })),
+      entries: entries
+        .filter((e) => e.listId === list.id)
+        .map((e) => ({
+          id: e.id,
+          modelId: e.modelId,
+          groupId: e.groupId,
+          groupName: e.groupName,
+        })),
     })),
   });
 });
@@ -150,7 +160,16 @@ modelListRoutes.delete("/:id", async (c) => {
   return c.json({ ok: true });
 });
 
-const EntryInput = z.object({ modelId: z.string().trim().min(1).max(200) });
+/* Exactly one of the two — a single call id that resolves to two different
+   things is worse than two smaller, unambiguous ones. */
+const EntryInput = z
+  .object({
+    modelId: z.string().trim().min(1).max(200).nullish(),
+    groupId: z.string().trim().min(1).nullish(),
+  })
+  .refine((v) => Boolean(v.modelId) !== Boolean(v.groupId), {
+    message: "Give either a model or a group, not both.",
+  });
 
 /* Appended at the end — a fresh entry is the least-preferred one until
    someone says otherwise, never inserted ahead of what is already trusted. */
@@ -161,25 +180,41 @@ modelListRoutes.post("/:id/entries", async (c) => {
   const list = await ownList(c.req.param("id"), scope);
 
   const parsed = EntryInput.safeParse(await c.req.json().catch(() => ({})));
-  if (!parsed.success) throw new BadRequest("Pick a model.");
+  if (!parsed.success) throw new BadRequest(parsed.error.issues[0]?.message ?? "Pick a model or a group.");
 
-  /* Has to be a model id the owner can actually reach, not an arbitrary
-     string — an unrecognised entry would sit in the list looking chosen but
-     never resolving to anything. */
-  const [known] = await db
-    .select({ modelId: schema.models.modelId })
-    .from(schema.models)
-    .innerJoin(schema.providerConnections, eq(schema.models.providerId, schema.providerConnections.id))
-    .where(
-      and(
-        eq(schema.models.modelId, parsed.data.modelId),
-        scope.ownerOrgId
-          ? eq(schema.providerConnections.ownerOrgId, scope.ownerOrgId)
-          : eq(schema.providerConnections.ownerUserId, scope.ownerUserId!),
-      ),
-    )
-    .limit(1);
-  if (!known) throw new BadRequest("That model is not offered by any of this owner's providers.");
+  if (parsed.data.modelId) {
+    /* Has to be a model id the owner can actually reach, not an arbitrary
+       string — an unrecognised entry would sit in the list looking chosen but
+       never resolving to anything. */
+    const [known] = await db
+      .select({ modelId: schema.models.modelId })
+      .from(schema.models)
+      .innerJoin(schema.providerConnections, eq(schema.models.providerId, schema.providerConnections.id))
+      .where(
+        and(
+          eq(schema.models.modelId, parsed.data.modelId),
+          scope.ownerOrgId
+            ? eq(schema.providerConnections.ownerOrgId, scope.ownerOrgId)
+            : eq(schema.providerConnections.ownerUserId, scope.ownerUserId!),
+        ),
+      )
+      .limit(1);
+    if (!known) throw new BadRequest("That model is not offered by any of this owner's providers.");
+  } else {
+    const [group] = await db
+      .select({ id: schema.modelGroups.id })
+      .from(schema.modelGroups)
+      .where(
+        and(
+          eq(schema.modelGroups.id, parsed.data.groupId!),
+          scope.ownerOrgId
+            ? eq(schema.modelGroups.ownerOrgId, scope.ownerOrgId)
+            : eq(schema.modelGroups.ownerUserId, scope.ownerUserId!),
+        ),
+      )
+      .limit(1);
+    if (!group) throw new NotFound();
+  }
 
   const [{ next }] = await db
     .select({ next: sql<number>`coalesce(max(${schema.modelListEntries.position}), -1) + 1` })
@@ -191,19 +226,24 @@ modelListRoutes.post("/:id/entries", async (c) => {
     await db.insert(schema.modelListEntries).values({
       id,
       listId: list.id,
-      modelId: parsed.data.modelId,
+      modelId: parsed.data.modelId ?? null,
+      groupId: parsed.data.groupId ?? null,
       position: next,
       createdAt: Date.now(),
     });
   } catch (err) {
     if (String(err).includes("UNIQUE")) {
-      throw new BadRequest(`${parsed.data.modelId} is already on this list.`);
+      throw new BadRequest(
+        parsed.data.modelId
+          ? `${parsed.data.modelId} is already on this list.`
+          : "That group is already on this list.",
+      );
     }
     throw err;
   }
 
   await record(scope.ownerOrgId ?? null, actor, "model_list.entry_added", list.id, {
-    modelId: parsed.data.modelId,
+    ...(parsed.data.modelId ? { modelId: parsed.data.modelId } : { groupId: parsed.data.groupId }),
   });
   return c.json({ id }, 201);
 });
