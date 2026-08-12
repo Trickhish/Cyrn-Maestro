@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, type Actor, type Organization, type Project, type TaskSummary } from "../lib/api";
 import { OrgSwitcher } from "./OrgSwitcher";
-import { ConductorIcon, InboxIcon, FleetIcon, SettingsIcon, ThemeIcon } from "./icons";
+import { ConductorIcon, InboxIcon, FleetIcon, SettingsIcon, ThemeIcon, ActivityIcon } from "./icons";
 
 /* The rail carries navigation, not counts.
  *
@@ -12,7 +12,8 @@ export type View =
   | { name: "project"; projectId: string }
   | { name: "task"; taskId: string }
   | { name: "conductor" }
-  | { name: "fleet" };
+  | { name: "fleet" }
+  | { name: "activity" };
 
 interface RailProps {
   actor: Actor;
@@ -170,6 +171,17 @@ export function Rail({
           <FleetIcon />
           <span className="flex-1">Fleet</span>
         </button>
+        {activeOrgId && (
+          <button
+            type="button"
+            className="rail-item"
+            data-active={view.name === "activity"}
+            onClick={() => onNavigate({ name: "activity" })}
+          >
+            <ActivityIcon />
+            <span className="flex-1">Activity</span>
+          </button>
+        )}
         <button type="button" className="rail-item" onClick={onToggleTheme} title="Toggle theme">
           <ThemeIcon />
           <span className="flex-1">Theme</span>

@@ -8,6 +8,7 @@ import { ProjectHome } from "./screens/ProjectHome";
 import { LiveThread } from "./screens/LiveThread";
 import { Fleet } from "./screens/Fleet";
 import { Conductor } from "./screens/Conductor";
+import { Activity } from "./screens/Activity";
 
 export default function App() {
   const [actor, setActor] = useState<Actor | null>(null);
@@ -105,6 +106,10 @@ export default function App() {
       />
 
       {view.name === "fleet" && <Fleet />}
+
+      {view.name === "activity" && (
+        <Activity org={organizations.find((o) => o.id === getActiveOrg())} />
+      )}
 
       {view.name === "conductor" && (
         <Conductor onOpenTask={(taskId) => setView({ name: "task", taskId })} />

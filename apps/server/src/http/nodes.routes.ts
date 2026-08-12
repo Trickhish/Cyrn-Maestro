@@ -5,6 +5,7 @@ import { db, schema } from "../db";
 import { config } from "../config";
 import { createEnrollmentToken, revokeNode, getLiveNode } from "../nodes/registry";
 import { assertCan, nodeScope, projectScope } from "../lib/permissions";
+import { record } from "../lib/audit";
 import { BadRequest, NotFound, requireActor, activeScope, type Env } from "./context";
 
 export const nodeRoutes = new Hono<Env>();
@@ -68,6 +69,9 @@ nodeRoutes.post("/enroll", async (c) => {
   }
 
   const token = await createEnrollmentToken(scope, parsed.data.projectId ?? null);
+  /* The token itself is never recorded — only that someone created the ability
+     to add a machine that runs arbitrary commands. */
+  await record(scope.ownerOrgId, actor, "node.enrollment_created", parsed.data.projectId ?? null);
 
   return c.json({
     token,
@@ -83,5 +87,6 @@ nodeRoutes.delete("/:id", async (c) => {
   await assertCan(actor, "node.revoke", scope);
 
   if (!(await revokeNode(c.req.param("id"), scope))) throw new NotFound();
+  await record(scope.ownerOrgId ?? null, actor, "node.revoked", c.req.param("id"));
   return c.json({ ok: true });
 });

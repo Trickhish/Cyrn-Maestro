@@ -13,6 +13,7 @@ import {
   SESSION_COOKIE,
 } from "../lib/auth";
 import { BadRequest, requireActor, type Env } from "./context";
+import { record } from "../lib/audit";
 
 const Credentials = z.object({
   email: z.email("That does not look like an email address."),
@@ -74,6 +75,10 @@ authRoutes.post("/login", async (c) => {
   if (!actor) {
     /* One message for both failure modes, so this endpoint cannot be used to
        find out which email addresses have accounts. */
+    /* Recorded without an actor — the whole point is that authentication did
+       not succeed, so there is nobody to attribute it to beyond the address
+       that was tried. */
+    await record(null, null, "auth.failed", parsed.data.email.trim().toLowerCase());
     return c.json({ error: "That email and password do not match." }, 401);
   }
 
@@ -83,6 +88,8 @@ authRoutes.post("/login", async (c) => {
   });
 
   c.header("Set-Cookie", sessionCookie(token, secureFor(c)));
+  /* Instance scope: a sign-in is not yet inside any organization. */
+  await record(null, actor, "auth.signed_in");
   return c.json({ actor });
 });
 

@@ -87,3 +87,9 @@ export const HistoryIcon = (p: IconProps) => (
     <path d="M8 5.4V8l1.8 1.2" />
   </Svg>
 );
+
+export const ActivityIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M1.8 8h2.6l1.6-4.4 2.6 9L10.4 8h3.8" />
+  </Svg>
+);

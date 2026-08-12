@@ -7,6 +7,7 @@ import { startTask, steer, cancel, decideApproval, isRunning } from "../tasks/ru
 import { onlineNodes, loadOf, noteAssigned } from "../nodes/registry";
 import { assertCan, projectScope, taskScope } from "../lib/permissions";
 import { BadRequest, NotFound, requireActor, type Env } from "./context";
+import { record } from "../lib/audit";
 
 export const taskRoutes = new Hono<Env>();
 
@@ -308,6 +309,12 @@ taskRoutes.post("/:id/approve", async (c) => {
     actor.id,
   );
   if (!ok) throw new BadRequest("That approval has already been decided, or does not exist.");
+
+  /* Who let a command run on a real machine is exactly the question this log
+     exists to answer. */
+  await record(scope.ownerOrgId ?? null, actor, parsed.data.approved ? "task.approved" : "task.denied", c.req.param("id"), {
+    callId: parsed.data.callId,
+  });
   return c.json({ ok: true });
 });
 
