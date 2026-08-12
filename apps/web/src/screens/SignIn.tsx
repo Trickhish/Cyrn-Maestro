@@ -98,42 +98,29 @@ export function SignIn({ registrationOpen, onSignedIn }: SignInProps) {
             />
           </Field>
 
-          {/* Always mounted, not conditionally rendered — a password manager's
-              extension mostly qualifies a login form once, when the page first
-              loads, so a field inserted later by a client-side re-render can be
-              missed by the "fill everything" action even with perfect naming.
-              Keeping it in the DOM from the start puts it in that same initial
-              scan, in the same <form> as email and password, which is what a
-              *full* autofill (not just an inline per-field suggestion) needs to
-              recognise this as one login with three fields. Visually hidden
-              rather than unmounted, and out of the tab order, until it is
-              actually needed. */}
-          <div className={needsCode ? undefined : "sr-only"} aria-hidden={!needsCode}>
-            <Field label="Authenticator code">
-              <input
-                ref={codeRef}
-                /* Bitwarden's own working example for a site the user confirmed
-                   autofill on has no autocomplete attribute at all — it relies
-                   on the literal word "totp" in name/id. autocomplete is kept
-                   too, since it is still the correct WHATWG token and costs
-                   nothing, but the literal keyword is what actually carried the
-                   match on evidence, so both id and name use it exactly. */
-                type="text"
-                name="totp"
-                id="totp"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                tabIndex={needsCode ? undefined : -1}
-                placeholder="Six digits, or a recovery code"
-                className="w-full bg-surface border rule-default rounded-lg px-3 py-2 text-[13.5px] outline-none focus:border-[var(--border-accent)]"
-              />
-            </Field>
-          </div>
+          {/* TEMPORARY: unconditionally visible, to test whether the password
+              manager only needed the field to be genuinely on-screen from the
+              start — sr-only (hidden-but-mounted) did not fix it, so this
+              removes hiding as a variable entirely. If this is what makes
+              autofill work, the field needs a real always-there design (e.g.
+              a separate step per OVH) rather than reverting to hidden. */}
+          <Field label="Authenticator code" hint="Only used if this account has two-factor turned on.">
+            <input
+              ref={codeRef}
+              type="text"
+              name="totp"
+              id="totp"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              placeholder="Six digits, or a recovery code"
+              className="w-full bg-surface border rule-default rounded-lg px-3 py-2 text-[13.5px] outline-none focus:border-[var(--border-accent)]"
+            />
+          </Field>
 
           {error && (
             <div className="text-[12.5px] text-bad-hi border border-[var(--border-warn)] bg-raised rounded-lg px-3 py-2">
@@ -152,10 +139,12 @@ export function SignIn({ registrationOpen, onSignedIn }: SignInProps) {
 
 function Field({
   label,
+  hint,
   errors,
   children,
 }: {
   label: string;
+  hint?: string;
   errors?: string[];
   children: React.ReactNode;
 }) {
@@ -163,6 +152,7 @@ function Field({
     <label className="flex flex-col gap-1.5">
       <span className="font-mono text-[10px] tracking-[0.12em] uppercase text-faint">{label}</span>
       {children}
+      {hint && <span className="text-[11px] text-faint leading-snug">{hint}</span>}
       {errors?.length ? <span className="text-[12px] text-bad-hi">{errors[0]}</span> : null}
     </label>
   );
