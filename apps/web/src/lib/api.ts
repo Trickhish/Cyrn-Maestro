@@ -178,6 +178,24 @@ export const api = {
   confirm2fa: (code: string) => post<{ recoveryCodes: string[] }>("/account/2fa/confirm", { code }),
   disable2fa: (password: string) => post<{ ok: true }>("/account/2fa/disable", { password }),
 
+  instanceSettings: () =>
+    request<{
+      smtp: {
+        host: string; port: string; security: "tls" | "starttls" | "none";
+        username: string; passwordSet: boolean; fromAddress: string; fromName: string;
+      };
+      registration: { open: boolean; allowedDomain: string };
+    }>("/instance/settings"),
+  saveInstanceSettings: (body: Record<string, unknown>) =>
+    request<{
+      smtp: {
+        host: string; port: string; security: "tls" | "starttls" | "none";
+        username: string; passwordSet: boolean; fromAddress: string; fromName: string;
+      };
+      registration: { open: boolean; allowedDomain: string };
+    }>("/instance/settings", { method: "PUT", body: JSON.stringify(body) }),
+  testSmtp: (to: string) => post<{ ok: true }>("/instance/settings/smtp/test", { to }),
+
   orgs: () => request<{ organizations: Organization[] }>("/orgs"),
   createOrg: (name: string) => post<{ organization: Organization }>("/orgs", { name }),
   members: (orgId: string) =>

@@ -29,6 +29,13 @@
       "when": 1786517824496,
       "tag": "0003_past_wolfsbane",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1786518938879,
+      "tag": "0004_low_shooting_star",
+      "breakpoints": true
     }
   ]
 }

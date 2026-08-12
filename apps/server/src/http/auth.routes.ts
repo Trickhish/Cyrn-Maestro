@@ -7,6 +7,7 @@ import {
   createUser,
   destroySession,
   registrationOpen,
+  mayRegister,
   sessionCookie,
   clearedCookie,
   isSecureRequest,
@@ -43,18 +44,16 @@ authRoutes.get("/session", async (c) => {
 });
 
 authRoutes.post("/register", async (c) => {
-  if (!(await registrationOpen())) {
-    /* Not 403: after the first account, registration is closed to everyone,
-       which is a state of the instance rather than a fact about the caller. */
-    throw new BadRequest(
-      "Registration is closed on this instance. Ask an administrator for an invitation.",
-    );
-  }
-
   const parsed = Credentials.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) {
     throw new BadRequest("Check the form.", z.flattenError(parsed.error).fieldErrors);
   }
+
+  /* Checked after validation so a closed instance still tells someone their
+     email was malformed, rather than making them fix one problem at a time.
+     Not 403: this is a state of the instance, not a fact about the caller. */
+  const allowed = await mayRegister(parsed.data.email);
+  if (!allowed.ok) throw new BadRequest(allowed.reason!);
 
   const actor = await createUser(parsed.data.email, parsed.data.password);
   const token = await createSession(actor.id, {

@@ -64,6 +64,43 @@ export const sessions = sqliteTable(
   ],
 );
 
+/* Instance-wide configuration, set through the interface rather than the
+   environment so an administrator can change it without a redeploy.
+ *
+ * Key-value rather than a typed row: settings accrete, and a column per
+ * setting means a migration every time one is added. The `secret` flag marks
+ * values encrypted at rest — an SMTP password is a credential like any other,
+ * and is never returned by the API. */
+export const instanceSettings = sqliteTable("instance_settings", {
+  key: text("key").primaryKey(),
+  value: text("value"),
+  secret: integer("secret", { mode: "boolean" }).notNull().default(false),
+  updatedAt: integer("updated_at").notNull(),
+  updatedBy: text("updated_by").references(() => users.id, { onDelete: "set null" }),
+});
+
+/* Single-use, short-lived, hashed. A reset link is emailed, and email is not a
+   secure channel, so the token has to be worth as little as possible for as
+   short a time as possible. */
+export const passwordResets = sqliteTable(
+  "password_resets",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: integer("expires_at").notNull(),
+    usedAt: integer("used_at"),
+    requestedIp: text("requested_ip"),
+    createdAt: now(),
+  },
+  (t) => [
+    unique("password_reset_token_unique").on(t.tokenHash),
+    index("password_reset_user_idx").on(t.userId),
+  ],
+);
+
 export const organizations = sqliteTable(
   "organizations",
   {

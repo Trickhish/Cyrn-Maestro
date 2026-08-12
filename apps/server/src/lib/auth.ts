@@ -3,6 +3,7 @@ import { db, schema } from "../db";
 import { config } from "../config";
 import { hashPassword, verifyPassword, newToken, hashToken, decryptSecret } from "./crypto";
 import { verifyTotp } from "./totp";
+import { registrationPolicy } from "./settings";
 
 export interface Actor {
   id: string;
@@ -12,12 +13,36 @@ export interface Actor {
 
 export const SESSION_COOKIE = "maestro_session";
 
-/* Registration is open only until the first account exists. After that a fresh
-   self-hosted instance is not a land grab — growth is by invitation, which
-   lands with organizations in v0.3. */
+/* Registration is open until the first account exists — a fresh self-hosted
+   instance should not be a land grab — and after that only if an instance
+   administrator deliberately reopens it. */
 export async function registrationOpen(): Promise<boolean> {
   const [row] = await db.select({ n: count() }).from(schema.users);
-  return (row?.n ?? 0) === 0;
+  if ((row?.n ?? 0) === 0) return true;
+
+  return (await registrationPolicy()).open;
+}
+
+/* Whether this particular address may register, which is a separate question
+   from whether registration is open at all: an admin can reopen it and still
+   restrict it to one domain. */
+export async function mayRegister(email: string): Promise<{ ok: boolean; reason?: string }> {
+  if (!(await registrationOpen())) {
+    return {
+      ok: false,
+      reason: "Registration is closed on this instance. Ask an administrator for an invitation.",
+    };
+  }
+
+  const { allowedDomain } = await registrationPolicy();
+  if (!allowedDomain) return { ok: true };
+
+  const domain = email.trim().toLowerCase().split("@")[1] ?? "";
+  if (domain !== allowedDomain.toLowerCase()) {
+    return { ok: false, reason: `Only ${allowedDomain} addresses can register on this instance.` };
+  }
+
+  return { ok: true };
 }
 
 export async function createUser(email: string, password: string): Promise<Actor> {

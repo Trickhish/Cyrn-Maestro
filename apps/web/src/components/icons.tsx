@@ -93,3 +93,11 @@ export const ActivityIcon = (p: IconProps) => (
     <path d="M1.8 8h2.6l1.6-4.4 2.6 9L10.4 8h3.8" />
   </Svg>
 );
+
+export const ServerIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <rect x="2.4" y="2.6" width="11.2" height="4.2" rx="1" />
+    <rect x="2.4" y="9.2" width="11.2" height="4.2" rx="1" />
+    <path d="M4.8 4.7h.01M4.8 11.3h.01M11.4 4.7h1.2M11.4 11.3h1.2" />
+  </Svg>
+);

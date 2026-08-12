@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, type Actor, type Organization, type Project, type TaskSummary } from "../lib/api";
 import { OrgSwitcher } from "./OrgSwitcher";
-import { ConductorIcon, InboxIcon, FleetIcon, SettingsIcon, ThemeIcon, ActivityIcon } from "./icons";
+import { ConductorIcon, InboxIcon, FleetIcon, SettingsIcon, ThemeIcon, ActivityIcon, ServerIcon } from "./icons";
 
 /* The rail carries navigation, not counts.
  *
@@ -14,7 +14,8 @@ export type View =
   | { name: "conductor" }
   | { name: "fleet" }
   | { name: "activity" }
-  | { name: "settings" };
+  | { name: "settings" }
+  | { name: "instance" };
 
 interface RailProps {
   actor: Actor;
@@ -188,6 +189,17 @@ export function Rail({
           <span className="flex-1">Theme</span>
           <span className="font-mono text-[11px] text-faint">{theme}</span>
         </button>
+        {actor.instanceRole === "instance_admin" && (
+          <button
+            type="button"
+            className="rail-item"
+            data-active={view.name === "instance"}
+            onClick={() => onNavigate({ name: "instance" })}
+          >
+            <ServerIcon />
+            <span className="flex-1">Instance</span>
+          </button>
+        )}
         <button
           type="button"
           className="rail-item"

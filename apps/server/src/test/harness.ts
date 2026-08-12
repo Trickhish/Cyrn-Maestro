@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { db } from "../db";
 import { config } from "../config";
 import { clearMembershipCache } from "../lib/permissions";
+import { invalidateSettings } from "../lib/settings";
 
 /* Every DB-touching test file calls resetDatabase() in beforeAll.
  *
@@ -44,6 +45,9 @@ export function resetDatabase(): void {
     "nodes",
     "projects",
     "audit_log",
+    "password_resets",
+    "recovery_codes",
+    "instance_settings",
     "invitations",
     "memberships",
     "organizations",
@@ -56,6 +60,7 @@ export function resetDatabase(): void {
   /* Membership is cached for a few seconds; a stale entry across a reset would
      grant a role to a user the next test has not created yet. */
   clearMembershipCache();
+  invalidateSettings();
 }
 
 export const jsonPost = (body: unknown) => ({
