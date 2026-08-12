@@ -1,36 +1,25 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, schema } from "../db";
 import type { Actor } from "./auth";
+import { personalGrants, roleGrants, type OrgRole, type Permission } from "./roles";
+
+export type { Permission } from "./roles";
 
 /* One check in front of every route and every socket action.
  *
- * v0.1 has no organizations, so ownership is always a user. The signature is
- * already the one the README specifies — can(actor, permission, scope) — so
- * adding org roles in v0.3 changes this file and nothing that calls it.
+ * Two levels of authority, deliberately separate:
  *
- * Note what is deliberately absent: there is no `secret.read`. Provider keys
- * and node tokens are write-only through the API. No permission grants a read
- * path, so no role — instance admin included — can pull one back out. */
-
-export type Permission =
-  | "project.create"
-  | "project.read"
-  | "project.update"
-  | "project.delete"
-  | "task.run"
-  | "task.read"
-  | "task.approve"
-  | "task.cancel"
-  | "node.enroll"
-  | "node.read"
-  | "node.revoke"
-  | "provider.manage"
-  | "provider.read";
-
-export interface Scope {
-  ownerUserId?: string | null;
-  ownerOrgId?: string | null;
-}
+ *   Instance admin runs the server. That is about keeping the process alive —
+ *   users, registration policy, the fleet as infrastructure. It grants nothing
+ *   inside an organization the admin is not a member of. The person who
+ *   restarts the server should not silently be able to read every tenant's
+ *   source code, and the small friction of having to join an org — which is
+ *   itself audited, and visible to that org's owners — is worth it.
+ *
+ *   Organization role is about the work: Owner, Admin, Member, Viewer.
+ *
+ * Resolution needs a database read for org scopes, so this is async. The
+ * synchronous form remains for the personal case, which is most call sites. */
 
 export class Forbidden extends Error {
   constructor(readonly permission: Permission) {
@@ -38,18 +27,69 @@ export class Forbidden extends Error {
   }
 }
 
-export function can(actor: Actor | null, _permission: Permission, scope: Scope): boolean {
-  if (!actor) return false;
-
-  /* Org-owned resources are unreachable until v0.3 ships roles. Failing closed
-     here means a half-built tenancy feature cannot leak across owners. */
-  if (scope.ownerOrgId) return false;
-
-  return scope.ownerUserId === actor.id;
+export interface Scope {
+  ownerUserId?: string | null;
+  ownerOrgId?: string | null;
 }
 
-export function assertCan(actor: Actor | null, permission: Permission, scope: Scope): void {
-  if (!can(actor, permission, scope)) throw new Forbidden(permission);
+/* Membership is read on nearly every request, and it changes rarely. A short
+   TTL keeps a role change taking effect within seconds without hitting the
+   database on every permission check. */
+const MEMBERSHIP_TTL_MS = 5_000;
+const membershipCache = new Map<string, { role: OrgRole | null; at: number }>();
+
+export function invalidateMembership(userId: string, orgId: string): void {
+  membershipCache.delete(`${userId}:${orgId}`);
+}
+
+export function clearMembershipCache(): void {
+  membershipCache.clear();
+}
+
+export async function roleIn(userId: string, orgId: string): Promise<OrgRole | null> {
+  const key = `${userId}:${orgId}`;
+  const cached = membershipCache.get(key);
+  if (cached && Date.now() - cached.at < MEMBERSHIP_TTL_MS) return cached.role;
+
+  const [row] = await db
+    .select({ role: schema.memberships.role })
+    .from(schema.memberships)
+    .where(and(eq(schema.memberships.userId, userId), eq(schema.memberships.orgId, orgId)))
+    .limit(1);
+
+  const role = row?.role ?? null;
+  membershipCache.set(key, { role, at: Date.now() });
+  return role;
+}
+
+export async function can(
+  actor: Actor | null,
+  permission: Permission,
+  scope: Scope,
+): Promise<boolean> {
+  if (!actor) return false;
+
+  if (scope.ownerOrgId) {
+    const role = await roleIn(actor.id, scope.ownerOrgId);
+    /* No membership, no access — instance admin included. */
+    if (!role) return false;
+    return roleGrants(role, permission);
+  }
+
+  if (scope.ownerUserId) {
+    return scope.ownerUserId === actor.id && personalGrants(permission);
+  }
+
+  /* An unowned row is reachable by nobody. */
+  return false;
+}
+
+export async function assertCan(
+  actor: Actor | null,
+  permission: Permission,
+  scope: Scope,
+): Promise<void> {
+  if (!(await can(actor, permission, scope))) throw new Forbidden(permission);
 }
 
 /* Scope lookups. Each returns null when the row does not exist, so a caller
@@ -81,4 +121,29 @@ export async function nodeScope(nodeId: string): Promise<Scope | null> {
     .where(eq(schema.nodes.id, nodeId))
     .limit(1);
   return n ?? null;
+}
+
+export async function providerScope(providerId: string): Promise<Scope | null> {
+  const [p] = await db
+    .select({
+      ownerUserId: schema.providerConnections.ownerUserId,
+      ownerOrgId: schema.providerConnections.ownerOrgId,
+    })
+    .from(schema.providerConnections)
+    .where(eq(schema.providerConnections.id, providerId))
+    .limit(1);
+  return p ?? null;
+}
+
+/* The scope a new thing should be created in: an org when one is active and the
+   actor is a member, otherwise personal. */
+export async function creationScope(
+  actor: Actor,
+  orgId: string | null | undefined,
+): Promise<Scope> {
+  if (!orgId) return { ownerUserId: actor.id, ownerOrgId: null };
+
+  const role = await roleIn(actor.id, orgId);
+  if (!role) throw new Forbidden("project.create");
+  return { ownerUserId: null, ownerOrgId: orgId };
 }

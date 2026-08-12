@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { join } from "node:path";
 import { db } from "../db";
 import { config } from "../config";
+import { clearMembershipCache } from "../lib/permissions";
 
 /* Every DB-touching test file calls resetDatabase() in beforeAll.
  *
@@ -28,7 +29,10 @@ export function resetDatabase(): void {
     migrated = true;
   }
 
-  /* Order matters only in that children go before parents; foreign keys are on. */
+  /* Children before parents; foreign keys are on. A table missing from this
+     list leaves rows behind and the next test fails on a unique constraint
+     rather than on anything it was actually testing — so this list has to grow
+     with the schema. */
   for (const table of [
     "task_events",
     "approvals",
@@ -39,11 +43,19 @@ export function resetDatabase(): void {
     "provider_connections",
     "nodes",
     "projects",
+    "audit_log",
+    "invitations",
+    "memberships",
+    "organizations",
     "sessions",
     "users",
   ]) {
     db.run(sql.raw(`DELETE FROM ${table}`));
   }
+
+  /* Membership is cached for a few seconds; a stale entry across a reset would
+     grant a role to a user the next test has not created yet. */
+  clearMembershipCache();
 }
 
 export const jsonPost = (body: unknown) => ({

@@ -79,7 +79,7 @@ projectRoutes.patch("/:id", async (c) => {
   const actor = requireActor(c);
   const scope = await projectScope(c.req.param("id"));
   if (!scope) throw new NotFound();
-  assertCan(actor, "project.update", scope);
+  await assertCan(actor, "project.update", scope);
 
   const parsed = CreateProject.partial().safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) throw new BadRequest("Check the form.");
@@ -110,7 +110,7 @@ projectRoutes.delete("/:id", async (c) => {
   const actor = requireActor(c);
   const scope = await projectScope(c.req.param("id"));
   if (!scope) throw new NotFound();
-  assertCan(actor, "project.delete", scope);
+  await assertCan(actor, "project.delete", scope);
 
   await db.delete(schema.projects).where(eq(schema.projects.id, c.req.param("id")));
   return c.json({ ok: true });

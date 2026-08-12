@@ -15,6 +15,13 @@
       "when": 1786479740670,
       "tag": "0001_silly_the_fallen",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786513777078,
+      "tag": "0002_dashing_sabretooth",
+      "breakpoints": true
     }
   ]
 }

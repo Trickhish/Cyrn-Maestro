@@ -63,7 +63,7 @@ taskRoutes.post("/", async (c) => {
 
   const scope = await projectScope(parsed.data.projectId);
   if (!scope) throw new NotFound();
-  assertCan(actor, "task.run", scope);
+  await assertCan(actor, "task.run", scope);
 
   /* Manual dispatch in v0.1: the router lands in v0.4. Until then, honour the
      named node, or pick the least loaded online one so two tasks dispatched
@@ -175,7 +175,7 @@ taskRoutes.get("/:id", async (c) => {
   const actor = requireActor(c);
   const scope = await taskScope(c.req.param("id"));
   if (!scope) throw new NotFound();
-  assertCan(actor, "task.read", scope);
+  await assertCan(actor, "task.read", scope);
 
   const [task] = await db
     .select()
@@ -197,7 +197,7 @@ taskRoutes.get("/:id/stream", async (c) => {
   const taskId = c.req.param("id");
   const scope = await taskScope(taskId);
   if (!scope) throw new NotFound();
-  assertCan(actor, "task.read", scope);
+  await assertCan(actor, "task.read", scope);
 
   /* Resume from where the client left off. Without this, a dropped connection
      silently loses whatever happened while it was gone. */
@@ -267,7 +267,7 @@ taskRoutes.post("/:id/steer", async (c) => {
   const actor = requireActor(c);
   const scope = await taskScope(c.req.param("id"));
   if (!scope) throw new NotFound();
-  assertCan(actor, "task.run", scope);
+  await assertCan(actor, "task.run", scope);
 
   const parsed = Steer.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) throw new BadRequest("Type a message first.");
@@ -282,7 +282,7 @@ taskRoutes.post("/:id/cancel", async (c) => {
   const actor = requireActor(c);
   const scope = await taskScope(c.req.param("id"));
   if (!scope) throw new NotFound();
-  assertCan(actor, "task.cancel", scope);
+  await assertCan(actor, "task.cancel", scope);
 
   if (!cancel(c.req.param("id"))) throw new BadRequest("That task is not running.");
   return c.json({ ok: true });
@@ -294,7 +294,7 @@ taskRoutes.post("/:id/approve", async (c) => {
   const actor = requireActor(c);
   const scope = await taskScope(c.req.param("id"));
   if (!scope) throw new NotFound();
-  assertCan(actor, "task.approve", scope);
+  await assertCan(actor, "task.approve", scope);
 
   const parsed = Decision.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) throw new BadRequest("Send callId and approved.");
@@ -313,6 +313,6 @@ taskRoutes.get("/:id/seq", async (c) => {
   const actor = requireActor(c);
   const scope = await taskScope(c.req.param("id"));
   if (!scope) throw new NotFound();
-  assertCan(actor, "task.read", scope);
+  await assertCan(actor, "task.read", scope);
   return c.json({ seq: await lastSeq(c.req.param("id")) });
 });

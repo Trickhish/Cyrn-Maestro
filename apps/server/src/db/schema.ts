@@ -1,14 +1,15 @@
 import { sqliteTable, text, integer, real, index, unique } from "drizzle-orm/sqlite-core";
 
-/* v0.1 schema.
+/* Schema.
  *
- * Two shapes here are deliberately built for a future the spine does not yet
- * have, because retrofitting them means touching every query:
+ * Two shapes carry most of the weight:
  *
- *   ownerUserId / ownerOrgId — the (user XOR org) pair from the README. v0.1
- *   only ever writes ownerUserId, but "whose credentials pay for this task" is
- *   already a lookup on the same column that gates visibility, so tenancy
- *   later is a migration rather than a rewrite.
+ *   ownerUserId / ownerOrgId — the (user XOR org) pair from the README. Exactly
+ *   one is set on every ownable row. Because "whose credentials pay for this
+ *   task" is a lookup on the same column that gates visibility, the two can
+ *   never drift apart into a state where you can see something you cannot bill
+ *   to, or bill something you cannot see. Building it before organizations
+ *   existed is what made v0.3 a migration rather than a rewrite.
  *
  *   task_events — append-only, sequence-numbered per task. The live thread and
  *   a thread opened months later are the same render over these rows.
@@ -59,12 +60,88 @@ export const sessions = sqliteTable(
   ],
 );
 
+export const organizations = sqliteTable(
+  "organizations",
+  {
+    id: id(),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    /* An org admin can require it for everyone; enforcement lands with TOTP. */
+    require2fa: integer("require_2fa", { mode: "boolean" }).notNull().default(false),
+    createdAt: now(),
+  },
+  (t) => [unique("organizations_slug_unique").on(t.slug)],
+);
+
+export const memberships = sqliteTable(
+  "memberships",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    role: text("role", { enum: ["owner", "admin", "member", "viewer"] }).notNull(),
+    createdAt: now(),
+  },
+  (t) => [
+    /* One role per person per org: two rows would make "what can they do"
+       ambiguous, and the answer would depend on row order. */
+    unique("memberships_user_org_unique").on(t.userId, t.orgId),
+    index("memberships_org_idx").on(t.orgId),
+    index("memberships_user_idx").on(t.userId),
+  ],
+);
+
+export const invitations = sqliteTable(
+  "invitations",
+  {
+    id: id(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    role: text("role", { enum: ["owner", "admin", "member", "viewer"] }).notNull(),
+    /* Hash only, single use — same reasoning as an enrollment token: the link
+       travels through email, which is not a secure channel. */
+    tokenHash: text("token_hash").notNull(),
+    invitedBy: text("invited_by").references(() => users.id, { onDelete: "set null" }),
+    expiresAt: integer("expires_at").notNull(),
+    acceptedAt: integer("accepted_at"),
+    createdAt: now(),
+  },
+  (t) => [
+    unique("invitations_token_unique").on(t.tokenHash),
+    index("invitations_org_idx").on(t.orgId),
+  ],
+);
+
+/* Append-only. Owners and admins read it; nothing in the interface deletes
+   from it, which is the whole point of having it. */
+export const auditLog = sqliteTable(
+  "audit_log",
+  {
+    id: id(),
+    orgId: text("org_id").references(() => organizations.id, { onDelete: "cascade" }),
+    actorUserId: text("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    /* Kept even when the user row goes, so the record survives a deletion. */
+    actorEmail: text("actor_email"),
+    action: text("action").notNull(),
+    target: text("target"),
+    metadata: text("metadata", { mode: "json" }),
+    at: integer("at").notNull(),
+  },
+  (t) => [index("audit_org_idx").on(t.orgId), index("audit_at_idx").on(t.at)],
+);
+
 export const providerConnections = sqliteTable(
   "provider_connections",
   {
     id: id(),
     ownerUserId: text("owner_user_id").references(() => users.id, { onDelete: "cascade" }),
-    ownerOrgId: text("owner_org_id"),
+    ownerOrgId: text("owner_org_id").references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     kind: text("kind", { enum: ["openai_compatible", "anthropic"] }).notNull(),
     baseUrl: text("base_url").notNull(),
@@ -120,7 +197,7 @@ export const projects = sqliteTable(
   {
     id: id(),
     ownerUserId: text("owner_user_id").references(() => users.id, { onDelete: "cascade" }),
-    ownerOrgId: text("owner_org_id"),
+    ownerOrgId: text("owner_org_id").references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     slug: text("slug").notNull(),
     repoUrl: text("repo_url"),
@@ -131,7 +208,11 @@ export const projects = sqliteTable(
     spendCapUsd: real("spend_cap_usd"),
     createdAt: now(),
   },
-  (t) => [unique("projects_owner_slug_unique").on(t.ownerUserId, t.slug)],
+  (t) => [
+    unique("projects_owner_slug_unique").on(t.ownerUserId, t.slug),
+    unique("projects_org_slug_unique").on(t.ownerOrgId, t.slug),
+    index("projects_org_idx").on(t.ownerOrgId),
+  ],
 );
 
 export const nodes = sqliteTable(
@@ -139,7 +220,7 @@ export const nodes = sqliteTable(
   {
     id: id(),
     ownerUserId: text("owner_user_id").references(() => users.id, { onDelete: "cascade" }),
-    ownerOrgId: text("owner_org_id"),
+    ownerOrgId: text("owner_org_id").references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     /* Hash only, and revocable: deleting the row drops the node at its next
        frame. The plaintext is shown to the daemon once, over the socket. */
@@ -188,7 +269,7 @@ export const enrollmentTokens = sqliteTable(
   {
     id: id(),
     ownerUserId: text("owner_user_id").references(() => users.id, { onDelete: "cascade" }),
-    ownerOrgId: text("owner_org_id"),
+    ownerOrgId: text("owner_org_id").references(() => organizations.id, { onDelete: "cascade" }),
     projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
     tokenHash: text("token_hash").notNull(),
     /* Single use, 15 minutes. Burned the moment a daemon exchanges it, which
@@ -285,6 +366,9 @@ export const approvals = sqliteTable(
 );
 
 export type User = typeof users.$inferSelect;
+export type Organization = typeof organizations.$inferSelect;
+export type Membership = typeof memberships.$inferSelect;
+export type OrgRole = Membership["role"];
 export type Project = typeof projects.$inferSelect;
 export type Node = typeof nodes.$inferSelect;
 export type Workspace = typeof workspaces.$inferSelect;
