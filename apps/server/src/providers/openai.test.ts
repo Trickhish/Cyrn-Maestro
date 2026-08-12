@@ -276,6 +276,30 @@ describe("errors", () => {
       }
     }
   });
+
+  /* Omniroute reports a Groq rate limit this way: a 200 stream, some keepalive
+     frames with no choices, then an `error` field on a later frame. Without
+     reading it, the loop finds no choices and no usage and the turn reports
+     as a normal empty completion — indistinguishable from the model genuinely
+     saying nothing, which is a far harder thing to notice and debug. */
+  test("an error reported inside a 200 stream is not a silent empty completion", async () => {
+    const adapter = adapterFor(
+      sseResponse([
+        frame({ choices: [{ index: 0, delta: {}, finish_reason: null }] }),
+        frame({ choices: [{ index: 0, delta: {}, finish_reason: null }] }),
+        frame({ error: { message: "Request too large for model (TPM limit)" } }),
+      ]),
+    );
+
+    try {
+      await collect(adapter.stream(req));
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ProviderError);
+      expect((err as ProviderError).retryable).toBe(true);
+      expect((err as ProviderError).message).toContain("TPM limit");
+    }
+  });
 });
 
 describe("probing a model", () => {

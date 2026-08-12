@@ -208,6 +208,21 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         continue;
       }
 
+      /* A gateway can report a failure inside an otherwise-200 stream, after
+         it has already sent keepalive frames — Omniroute does this for a
+         Groq rate limit. Without this check the loop just finds no choices,
+         finds no usage, and the turn quietly "completes" with nothing: the
+         empty response looks identical to the model genuinely saying
+         nothing, which is a much harder thing to debug than a thrown error. */
+      if (chunk.error) {
+        const message = describeStreamedError(chunk.error);
+        throw new ProviderError(
+          message.startsWith("[") ? message : `[${request.model}] ${message}`,
+          429,
+          true,
+        );
+      }
+
       if (chunk.usage) {
         sawUsage = true;
         yield {
@@ -278,6 +293,7 @@ interface OpenAIChunk {
     finish_reason?: string | null;
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number };
+  error?: unknown;
 }
 
 function toWireMessage(message: ChatMessage): Record<string, unknown> {
