@@ -348,11 +348,31 @@ providerRoutes.post("/:id/refresh", async (c) => {
 /* How many models a refresh will verify before giving up on the rest. Chosen so
    an ordinary provider is fully checked while a gateway advertising hundreds
    does not turn a button press into five minutes and a rate limit. */
-/* Several ids routinely point at one underlying model — "cc/claude-opus-5"
- * and "claude/claude-opus-5" are the same thing behind two prefixes, and on a
- * real gateway that is fifty-odd redundant entries cluttering every picker.
- * `root` is what the provider itself says they have in common, so it is the
- * honest basis for collapsing them.
+/* What two ids have in common when they are the same model twice.
+ *
+ * The vendor namespace is the segment immediately before the model's name, and
+ * it is the only part allowed to differ: "cc/claude-opus-5" and
+ * "claude/claude-opus-5" are one model behind two prefixes. Everything else is
+ * kept — leading modifiers included, so "no-think/cc/x" never merges with
+ * "cc/x", because not thinking is a different model to talk to.
+ *
+ * Not the provider's own `root`: for the no-think variants it points at the id
+ * itself, so every one of them looks unique and thirty-odd pairs slip through.
+ * Root is still recorded, just not trusted for this.
+ *
+ * Scoped to one upstream. The same model served by two upstreams is not
+ * redundancy to tidy away — it is the redundancy model groups exist to
+ * exploit, and collapsing "antigravity/claude-sonnet-4-6" into the claude one
+ * would remove the fallback precisely when the other has gone down. */
+function aliasKey(model: { id: string; ownedBy?: string }): string | null {
+  const parts = model.id.split("/");
+  if (parts.length < 2) return null;
+  const withoutVendor = [...parts.slice(0, -2), parts[parts.length - 1]].join("/");
+  return `${model.ownedBy ?? ""}::${withoutVendor}`;
+}
+
+/* Several ids routinely point at one underlying model, and on a real gateway
+ * that is ninety-odd redundant entries cluttering every picker.
  *
  * Not `parent`: that links an effort variant to its base ("-low", "-high"),
  * and those are genuinely different models someone picks between deliberately.
@@ -369,15 +389,16 @@ providerRoutes.post("/:id/refresh", async (c) => {
  *      refreshes settle rather than flip-flopping. */
 async function collapseAliases(
   providerId: string,
-  offered: Array<{ id: string; root?: string }>,
+  offered: Array<{ id: string; ownedBy?: string; root?: string }>,
 ): Promise<number> {
-  const roots = new Map<string, string[]>();
+  const groups = new Map<string, string[]>();
   for (const model of offered) {
-    if (!model.root) continue;
-    roots.set(model.root, [...(roots.get(model.root) ?? []), model.id]);
+    const key = aliasKey(model);
+    if (!key) continue;
+    groups.set(key, [...(groups.get(key) ?? []), model.id]);
   }
 
-  const contested = [...roots.values()].filter((ids) => ids.length > 1);
+  const contested = [...groups.values()].filter((ids) => ids.length > 1);
   if (contested.length === 0) return 0;
 
   const rows = await db

@@ -601,7 +601,7 @@ describe("collapsing aliases of the same model", () => {
     globalThis.fetch = realFetch;
   });
 
-  function offering(entries: Array<{ id: string; root?: string }>) {
+  function offering(entries: Array<{ id: string; root?: string; owned_by?: string }>) {
     globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
       if (String(input).endsWith("/models")) {
         return new Response(JSON.stringify({ data: entries }), {
@@ -710,6 +710,41 @@ describe("collapsing aliases of the same model", () => {
 
     expect((await body<{ collapsed: number }>(await refresh())).collapsed).toBe(0);
     expect(await enabledOf("cc/opus")).toBe(first);
+  });
+
+
+  /* The case the provider's own `root` misses: for no-think variants it points
+     at the id itself, so every one looks unique and the pairs slip through. */
+  test("collapses no-think pairs the provider calls unique", async () => {
+    offering([
+      { id: "no-think/cc/opus", root: "no-think/cc/opus", owned_by: "claude" },
+      { id: "no-think/claude/opus", root: "no-think/claude/opus", owned_by: "claude" },
+    ]);
+    expect((await body<{ collapsed: number }>(await refresh())).collapsed).toBe(1);
+  });
+
+  /* Not thinking is a different model to talk to, so a modifier must never be
+     stripped the way a vendor prefix is. */
+  test("never merges a no-think variant into its thinking twin", async () => {
+    offering([
+      { id: "cc/opus", root: "a", owned_by: "claude" },
+      { id: "no-think/cc/opus", root: "b", owned_by: "claude" },
+    ]);
+    expect((await body<{ collapsed: number }>(await refresh())).collapsed).toBe(0);
+    expect(await enabledOf("cc/opus")).toBe(true);
+    expect(await enabledOf("no-think/cc/opus")).toBe(true);
+  });
+
+  /* The same model from two upstreams is the redundancy model groups exist to
+     exploit — collapsing it would remove the fallback. */
+  test("keeps the same model served by a different upstream", async () => {
+    offering([
+      { id: "cc/sonnet", root: "sonnet", owned_by: "claude" },
+      { id: "claude/sonnet", root: "sonnet", owned_by: "claude" },
+      { id: "antigravity/sonnet", root: "sonnet", owned_by: "antigravity" },
+    ]);
+    expect((await body<{ collapsed: number }>(await refresh())).collapsed).toBe(1);
+    expect(await enabledOf("antigravity/sonnet")).toBe(true);
   });
 
   test("a provider that reports no root collapses nothing", async () => {
