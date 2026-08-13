@@ -390,6 +390,14 @@ export const projects = sqliteTable(
     defaultModelId: text("default_model_id"),
     defaultTier: text("default_tier", { enum: ["heavy", "standard", "light"] }),
     spendCapUsd: real("spend_cap_usd"),
+    /* Lets the Conductor answer a worker's approval prompt instead of stopping
+       to ask a human. Off by default and per project, because it hands one
+       model's judgement the decision a person was being asked to make. The
+       node's own refuse list is unaffected — see apps/node/src/policy.ts, which
+       still blocks what it blocks no matter who approved it. */
+    conductorApproves: integer("conductor_approves", { mode: "boolean" })
+      .notNull()
+      .default(false),
     createdAt: now(),
   },
   (t) => [
@@ -746,6 +754,15 @@ export const approvals = sqliteTable(
     reason: text("reason").notNull(),
     approved: integer("approved", { mode: "boolean" }),
     decidedBy: text("decided_by").references(() => users.id, { onDelete: "set null" }),
+    /* Set when the Conductor answered instead of a person. `decidedBy` stays
+       null for those — it is a foreign key to a real account, and recording a
+       machine decision as if a user made it would be a lie in the audit
+       trail. */
+    decidedByConductor: integer("decided_by_conductor", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    /* Why it decided that, so the trail explains itself later. */
+    decisionReason: text("decision_reason"),
     decidedAt: integer("decided_at"),
     requestedAt: integer("requested_at").notNull(),
   },

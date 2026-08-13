@@ -96,6 +96,34 @@ export function ProjectSettings({ project, onChanged }: { project: Project; onCh
 
       <section className="flex flex-col gap-3">
         <div className="flex flex-col gap-1">
+          <h2 className="font-mono text-[10px] tracking-[0.14em] uppercase text-faint">Approvals</h2>
+          <p className="text-[12.5px] text-tertiary leading-[1.55]">
+            A worker stops and asks before running something its machine flags — a shell command that
+            changes things, an MCP tool marked as sensitive.
+          </p>
+        </div>
+
+        <label className="flex items-start gap-2.5 cursor-pointer">
+          <input
+            type="checkbox"
+            className="mt-0.5 flex-none"
+            checked={project.conductorApproves}
+            onChange={(e) => void patch({ conductorApproves: e.target.checked })}
+          />
+          <span className="flex flex-col gap-1">
+            <span className="text-[13px]">Let the Conductor answer these</span>
+            <span className="text-[12.5px] text-tertiary leading-[1.55]">
+              It approves ordinary work for the task — building, installing, tests, local git — and
+              refuses anything that publishes, touches credentials, or reaches outside the workspace.
+              Anything it is unsure about still comes to you, as does everything past 25 approvals in
+              one task. Your machines' own refuse list is unchanged and still overrides it.
+            </span>
+          </span>
+        </label>
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <div className="flex flex-col gap-1">
           <h2 className="font-mono text-[10px] tracking-[0.14em] uppercase text-faint">
             Routing rules
           </h2>

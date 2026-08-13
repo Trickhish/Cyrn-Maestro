@@ -1,7 +1,14 @@
-import { expect, test, describe, beforeEach, mock } from "bun:test";
+import { expect, test, describe, beforeEach, afterAll, mock } from "bun:test";
 import { and, eq, isNull } from "drizzle-orm";
 import { db, schema } from "../db";
 import { resetDatabase } from "../test/harness";
+
+/* mock.module is process-wide, so the real module is captured first and put
+   back at the end rather than left stubbed for every later test file. */
+const realRunner = { ...(await import("./runner")) };
+afterAll(() => {
+  mock.module("./runner", () => realRunner);
+});
 
 /* Reporting back on dispatched work.
  *

@@ -16,6 +16,9 @@ const CreateProject = z.object({
   defaultModelId: z.string().nullish(),
   defaultTier: z.enum(["light", "standard", "heavy"]).nullish(),
   spendCapUsd: z.number().min(0).nullish(),
+  /* Hands the Conductor the approval prompts a worker would otherwise stop on.
+     Off unless deliberately turned on — see conductor/approvals.ts. */
+  conductorApproves: z.boolean().optional(),
 });
 
 function slugify(name: string): string {
@@ -113,6 +116,9 @@ projectRoutes.patch("/:id", async (c) => {
         : {}),
       ...(parsed.data.defaultTier !== undefined ? { defaultTier: parsed.data.defaultTier } : {}),
       ...(parsed.data.spendCapUsd !== undefined ? { spendCapUsd: parsed.data.spendCapUsd } : {}),
+      ...(parsed.data.conductorApproves !== undefined
+        ? { conductorApproves: parsed.data.conductorApproves }
+        : {}),
     })
     .where(eq(schema.projects.id, c.req.param("id")));
 

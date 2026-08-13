@@ -181,6 +181,28 @@ export async function actorForToken(token: string | undefined): Promise<Actor | 
   return { id: row.id, email: row.email, instanceRole: row.instanceRole };
 }
 
+/* The actor behind a stored user id, for work that runs with no request in
+   flight — a background job acting as the person whose task it is. Suspended
+   and deleted accounts come back null, so nothing keeps running on their
+   behalf after their access is withdrawn. */
+export async function actorById(userId: string | null | undefined): Promise<Actor | null> {
+  if (!userId) return null;
+
+  const [row] = await db
+    .select({
+      id: schema.users.id,
+      email: schema.users.email,
+      instanceRole: schema.users.instanceRole,
+      status: schema.users.status,
+    })
+    .from(schema.users)
+    .where(eq(schema.users.id, userId))
+    .limit(1);
+
+  if (!row || row.status !== "active") return null;
+  return { id: row.id, email: row.email, instanceRole: row.instanceRole };
+}
+
 export async function destroySession(token: string | undefined): Promise<void> {
   if (!token) return;
   await db.delete(schema.sessions).where(eq(schema.sessions.tokenHash, hashToken(token)));

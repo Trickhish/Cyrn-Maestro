@@ -1,8 +1,18 @@
-import { expect, test, describe, beforeEach } from "bun:test";
+import { expect, test, describe, beforeEach, afterAll, mock } from "bun:test";
 import { eq } from "drizzle-orm";
 import { newId } from "@maestro/protocol";
 import { db, schema } from "../db";
 import { resetDatabase } from "../test/harness";
+
+/* Tasks dispatched here carry a Conductor origin, so finishing one asks the
+   real provider for a report. Stubbed to keep the suite offline — what the
+   follow-up does is covered in followup.test.ts. Restored afterwards because
+   mock.module applies to the whole process. */
+const realFollowup = { ...(await import("./followup")) };
+mock.module("./followup", () => ({ ...realFollowup, followUpOnTask: async () => {} }));
+afterAll(() => {
+  mock.module("./followup", () => realFollowup);
+});
 import { encryptSecret } from "../lib/crypto";
 import {
   createEnrollmentToken,

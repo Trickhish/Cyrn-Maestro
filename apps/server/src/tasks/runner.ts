@@ -26,6 +26,7 @@ import { checkSpend } from "../router/spend";
 import { ProviderError } from "../providers/types";
 import { awaitResult, sendToNode, subscribeToTask, getLiveNode, noteReleased } from "../nodes/registry";
 import { followUpOnTask } from "../conductor/followup";
+import { adjudicate } from "../conductor/approvals";
 
 /* The agent loop.
  *
@@ -391,13 +392,14 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
         } else if (mcpName) {
           await mcpCall(
             taskId,
+            task.projectId,
             { ownerUserId: project.ownerUserId, ownerOrgId: project.ownerOrgId },
             { ...call, name: mcpName },
             mcp.needsApproval,
             state,
           );
         } else {
-          await executeCall(taskId, task.nodeId!, call, state);
+          await executeCall(taskId, task.nodeId!, task.projectId, call, state);
         }
         if (state.abort.signal.aborted) break;
       }
@@ -505,6 +507,7 @@ export async function listMcpToolsCall(
    database over MCP deserves the prompt that `psql` would have got. */
 async function mcpCall(
   taskId: string,
+  projectId: string,
   owner: { ownerUserId?: string | null; ownerOrgId?: string | null },
   call: { id: string; name: string; argumentsJson: string },
   needsApproval: Set<string>,
@@ -547,7 +550,6 @@ async function mcpCall(
       requestedAt: Date.now(),
     });
 
-    await db.update(schema.tasks).set({ status: "awaiting_approval" }).where(eq(schema.tasks.id, taskId));
     append(taskId, {
       kind: "approval_requested",
       callId: call.id,
@@ -555,19 +557,54 @@ async function mcpCall(
       summary,
       reason: "mcp_tool",
     });
-    append(taskId, { kind: "status", status: "awaiting_approval" });
 
-    const allowed = await waitForDecision(call.id, state);
+    /* The same gate as a shell command's, answered the same way when the
+       project has asked for it. */
+    const auto = await adjudicate({
+      taskId,
+      projectId,
+      tool: call.name,
+      summary,
+      reason: "an MCP tool that is marked as needing approval",
+    });
 
-    await db.update(schema.tasks).set({ status: "running" }).where(eq(schema.tasks.id, taskId));
-    append(taskId, { kind: "status", status: "running" });
+    let allowed: boolean;
+
+    if (auto) {
+      await db
+        .update(schema.approvals)
+        .set({
+          approved: auto.approved,
+          decidedByConductor: true,
+          decisionReason: auto.reason,
+          decidedAt: Date.now(),
+        })
+        .where(eq(schema.approvals.callId, call.id));
+
+      append(taskId, {
+        kind: "approval_decided",
+        callId: call.id,
+        approved: auto.approved,
+        decidedBy: `the Conductor — ${auto.reason}`,
+      });
+
+      allowed = auto.approved;
+    } else {
+      await db.update(schema.tasks).set({ status: "awaiting_approval" }).where(eq(schema.tasks.id, taskId));
+      append(taskId, { kind: "status", status: "awaiting_approval" });
+
+      allowed = await waitForDecision(call.id, state);
+
+      await db.update(schema.tasks).set({ status: "running" }).where(eq(schema.tasks.id, taskId));
+      append(taskId, { kind: "status", status: "running" });
+    }
 
     if (!allowed) {
       append(taskId, {
         kind: "tool_result",
         callId: call.id,
         ok: false,
-        output: "The call was denied.",
+        output: auto ? `The Conductor did not approve that: ${auto.reason}` : "The call was denied.",
       });
       return;
     }
@@ -588,6 +625,7 @@ async function mcpCall(
 async function executeCall(
   taskId: string,
   nodeId: string,
+  projectId: string,
   call: { id: string; name: string; argumentsJson: string },
   state: RunState,
 ): Promise<void> {
@@ -628,7 +666,7 @@ async function executeCall(
 
   append(taskId, { kind: "tool_call", callId: call.id, tool, args, summary: summarise(tool, args) });
 
-  const result = await dispatchToNode(taskId, nodeId, call.id, tool, args, state, false);
+  const result = await dispatchToNode(taskId, nodeId, projectId, call.id, tool, args, state, false);
 
   append(taskId, {
     kind: "tool_result",
@@ -647,6 +685,9 @@ async function executeCall(
 async function dispatchToNode(
   taskId: string,
   nodeId: string,
+  /* Carried down because whether the Conductor may answer an approval is a
+     property of the project, and this is where an approval is answered. */
+  projectId: string,
   callId: string,
   tool: ToolName,
   args: unknown,
@@ -685,11 +726,8 @@ async function dispatchToNode(
           requestedAt: Date.now(),
         });
 
-        await db
-          .update(schema.tasks)
-          .set({ status: "awaiting_approval" })
-          .where(eq(schema.tasks.id, taskId));
-
+        /* Recorded before anyone decides, so the trail shows what was asked
+           even when the answer comes from the Conductor a second later. */
         append(taskId, {
           kind: "approval_requested",
           callId,
@@ -697,19 +735,69 @@ async function dispatchToNode(
           summary: message.summary,
           reason: message.reason,
         });
-        append(taskId, { kind: "status", status: "awaiting_approval" });
 
-        const decision = await waitForDecision(callId, state);
+        /* Only when the project has asked for it, and only ever as a decision
+           the node was already willing to act on. Anything unclear, unavailable
+           or over budget comes back null and the human is asked, exactly as
+           before — see conductor/approvals.ts. */
+        const auto = await adjudicate({
+          taskId,
+          projectId,
+          tool: message.tool,
+          summary: message.summary,
+          reason: message.reason,
+        });
+
+        let decision: boolean;
+
+        if (auto) {
+          await db
+            .update(schema.approvals)
+            .set({
+              approved: auto.approved,
+              decidedByConductor: true,
+              decisionReason: auto.reason,
+              decidedAt: Date.now(),
+            })
+            .where(eq(schema.approvals.callId, callId));
+
+          append(taskId, {
+            kind: "approval_decided",
+            callId,
+            approved: auto.approved,
+            decidedBy: `the Conductor — ${auto.reason}`,
+          });
+
+          decision = auto.approved;
+        } else {
+          /* Nobody is coming unless the task says it is waiting, so this is
+             only set once the Conductor has declined to answer. */
+          await db
+            .update(schema.tasks)
+            .set({ status: "awaiting_approval" })
+            .where(eq(schema.tasks.id, taskId));
+          append(taskId, { kind: "status", status: "awaiting_approval" });
+
+          decision = await waitForDecision(callId, state);
+        }
 
         if (!decision) {
-          done({ ok: false, output: "The command was denied." });
+          done({
+            ok: false,
+            output: auto ? `The Conductor did not approve that: ${auto.reason}` : "The command was denied.",
+          });
           return;
         }
 
-        await db.update(schema.tasks).set({ status: "running" }).where(eq(schema.tasks.id, taskId));
-        append(taskId, { kind: "status", status: "running" });
+        /* Only worth saying when the task actually stopped. A Conductor
+           decision never moved it off "running", and announcing a resume it
+           never paused for is noise in the thread. */
+        if (!auto) {
+          await db.update(schema.tasks).set({ status: "running" }).where(eq(schema.tasks.id, taskId));
+          append(taskId, { kind: "status", status: "running" });
+        }
 
-        const retry = await dispatchToNode(taskId, nodeId, callId, tool, args, state, true);
+        const retry = await dispatchToNode(taskId, nodeId, projectId, callId, tool, args, state, true);
         done(retry);
       }
     });

@@ -165,6 +165,9 @@ export interface Project {
   defaultModelId: string | null;
   defaultTier: "light" | "standard" | "heavy" | null;
   spendCapUsd: number | null;
+  /* When on, the Conductor answers the approval prompts a worker would
+     otherwise stop on. Off by default. */
+  conductorApproves: boolean;
 }
 
 export interface RoutingRule {
