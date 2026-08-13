@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, type TaskSummary } from "../lib/api";
-import { Composer } from "../components/Composer";
+import { Composer, type SlashCommand } from "../components/Composer";
 
 /* The conversation about all of them.
  *
@@ -191,15 +191,28 @@ export function Conductor({
     );
   }, [tasks, messages, busy]);
 
+  /* Wipes the persisted thread on the server too, not just the local view —
+     otherwise the next reload brings the "cleared" messages right back. */
+  async function clearThread() {
+    setMessages([]);
+    reported.current.clear();
+    await api.clearConductorHistory(projectId).catch(() => {});
+  }
+
+  const commands: SlashCommand[] = [
+    { name: "clear", description: "Clear the conversation", run: () => void clearThread() },
+  ];
+
   const composer = (
     <Composer
       chip={embedded ? undefined : "dispatches work"}
       placeholder={embedded ? "What should the agent do?" : "Ask about everything"}
       hints={
         embedded
-          ? ["⏎ send", "the Conductor picks a model and dispatches the work"]
-          : ["⏎ send", "can dispatch tasks and pick a model list for them"]
+          ? ["⏎ send", "/ for commands", "the Conductor picks a model and dispatches the work"]
+          : ["⏎ send", "/ for commands", "can dispatch tasks and pick a model list for them"]
       }
+      commands={commands}
       onSend={(text) => void ask(text)}
     />
   );
