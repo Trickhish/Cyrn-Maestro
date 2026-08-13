@@ -63,6 +63,90 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 
+/* What the Conductor is doing right now, one step at a time. */
+export type ConductorProgress =
+  | { phase: "thinking" }
+  | { phase: "tool"; name: string; summary?: string };
+
+export interface ConductorAnswer {
+  text: string;
+  usedTools: Array<{ name: string; args: unknown; result: string }>;
+  /* Task ids this turn dispatched, taken from the tool's own result. */
+  dispatched: string[];
+  usage: { inputTokens: number; outputTokens: number };
+  model: string;
+}
+
+/* Reads the Conductor's SSE reply: `progress` frames go to onProgress, and the
+   single `done` frame is the answer. An `error` frame — or a non-stream error
+   response, e.g. an expired session — throws an ApiError, so callers handle it
+   exactly as they did the old JSON call. */
+async function askConductorStream(
+  question: string,
+  history: Array<{ role: "user" | "assistant"; content: string }>,
+  scope: Record<string, unknown> = {},
+  onProgress?: (event: ConductorProgress) => void,
+): Promise<ConductorAnswer> {
+  const res = await fetch("/api/conductor/ask", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "content-type": "application/json",
+      ...(activeOrgId ? { "x-maestro-org": activeOrgId } : {}),
+    },
+    body: JSON.stringify({ question, history, ...scope }),
+  });
+
+  /* An error before the stream opens (auth, a rejected body) still comes back
+     as JSON, not SSE — read it the plain way. */
+  if (!res.ok || !res.body) {
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    throw new ApiError(
+      typeof body.error === "string" ? body.error : `Request failed (${res.status}).`,
+      res.status,
+    );
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let answer: ConductorAnswer | null = null;
+  let failure: { error: string; retryable?: boolean } | null = null;
+
+  const consume = (frame: string) => {
+    let event = "message";
+    const data: string[] = [];
+    for (const line of frame.split("\n")) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+    }
+    if (!data.length) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data.join("\n"));
+    } catch {
+      return;
+    }
+    if (event === "progress") onProgress?.(parsed as ConductorProgress);
+    else if (event === "done") answer = parsed as ConductorAnswer;
+    else if (event === "error") failure = parsed as { error: string; retryable?: boolean };
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) if (frame.trim()) consume(frame);
+  }
+  if (buffer.trim()) consume(buffer);
+
+  if (failure) throw new ApiError((failure as { error: string }).error, 502);
+  if (!answer) throw new ApiError("The Conductor did not respond.", 502);
+  return answer;
+}
+
 /* ------------------------------------------------------------------ types */
 
 export interface Actor {
@@ -534,15 +618,10 @@ export const api = {
       conductorModel?: string;
       silent?: boolean;
     },
-  ) =>
-    post<{
-      text: string;
-      usedTools: Array<{ name: string; args: unknown; result: string }>;
-      /* Task ids this turn dispatched, taken from the tool's own result. */
-      dispatched: string[];
-      usage: { inputTokens: number; outputTokens: number };
-      model: string;
-    }>("/conductor/ask", { question, history, ...scope }),
+    /* Called for each live step of the turn — a model turn or a tool about to
+       run — so the chat can narrate what it is doing instead of "Looking…". */
+    onProgress?: (event: ConductorProgress) => void,
+  ) => askConductorStream(question, history, scope, onProgress),
 
   /* The thread as the server has it, so reopening a page continues the
      conversation rather than starting a new one. */

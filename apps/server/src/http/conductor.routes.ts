@@ -171,6 +171,11 @@ conductorRoutes.delete("/history", async (c) => {
   return c.json({ ok: true });
 });
 
+/* Streamed rather than a single JSON reply so the chat can narrate the turn as
+   it happens — a `progress` frame per model turn and tool call, then one `done`
+   frame carrying the whole answer, or an `error` frame instead. The final
+   payload is exactly what the JSON reply used to be, so the only client change
+   is reading the last frame rather than the body. */
 conductorRoutes.post("/ask", async (c) => {
   const actor = requireActor(c);
 
@@ -178,68 +183,104 @@ conductorRoutes.post("/ask", async (c) => {
   if (!parsed.success) throw new BadRequest("Ask something.");
 
   const projectId = parsed.data.projectId;
+  const encoder = new TextEncoder();
 
-  try {
-    /* Read from the thread rather than trusting what the client sends: it is
-       the same conversation the interface renders, and it is what lets the
-       Conductor know what was asked of it before the page was reloaded. */
-    const history = (await loadThread(actor.id, projectId)).map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
+  const stream = new ReadableStream({
+    async start(controller) {
+      let closed = false;
+      const send = (event: string, data: unknown) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          closed = true;
+        }
+      };
 
-    const turn = await askConductor(
-      actor,
-      history,
-      parsed.data.question,
-      c.req.raw.signal,
-      {
-        projectId: parsed.data.projectId,
-        pinnedModel: parsed.data.pinnedModel,
-        pinnedNodeId: parsed.data.pinnedNodeId,
-        pinnedModelList: parsed.data.pinnedModelList,
-        conductorModel: parsed.data.conductorModel,
-      },
-    );
+      try {
+        /* Read from the thread rather than trusting what the client sends: it is
+           the same conversation the interface renders, and it is what lets the
+           Conductor know what was asked of it before the page was reloaded. */
+        const history = (await loadThread(actor.id, projectId)).map((m) => ({
+          role: m.role,
+          content: m.content,
+        }));
 
-    if (!parsed.data.silent) await remember(actor.id, projectId, "user", parsed.data.question);
-    await remember(
-      actor.id,
-      projectId,
-      "assistant",
-      turn.text,
-      turn.model,
-      turn.toolCalls.map((call) => ({ name: call.name, args: call.args, result: call.result })),
-    );
+        const turn = await askConductor(
+          actor,
+          history,
+          parsed.data.question,
+          c.req.raw.signal,
+          {
+            projectId: parsed.data.projectId,
+            pinnedModel: parsed.data.pinnedModel,
+            pinnedNodeId: parsed.data.pinnedNodeId,
+            pinnedModelList: parsed.data.pinnedModelList,
+            conductorModel: parsed.data.conductorModel,
+          },
+          (event) => send("progress", event),
+        );
 
-    return c.json({
-      text: turn.text,
-      /* The tools it used, so the interface can show its work rather than
-         asking the user to trust an unsourced answer. */
-      usedTools: turn.toolCalls.map((call) => ({
-        name: call.name,
-        args: call.args,
-        /* Sent so the chat can show its work the way a task thread does —
-           what was asked and what came back, not just which tools ran. */
-        result: call.result,
-      })),
-      /* What this turn actually dispatched, read from the tool's own result
-         rather than from the model's prose — it does not reliably quote the
-         id back, and a card the interface only draws when the sentence
-         happens to mention one is a card that mostly does not appear. */
-      dispatched: turn.toolCalls.flatMap((call) =>
-        call.name === "create_task" ? [...call.result.matchAll(/\[([0-9a-f-]{8,})\]/gi)].map((m) => m[1]) : [],
-      ),
-      usage: turn.usage,
-      model: turn.model,
-    });
-  } catch (err) {
-    if (err instanceof NoProviderError) {
-      return c.json({ error: err.message }, 400);
-    }
-    if (err instanceof ProviderError) {
-      return c.json({ error: err.message, retryable: err.retryable }, 502);
-    }
-    throw err;
-  }
+        if (!parsed.data.silent) await remember(actor.id, projectId, "user", parsed.data.question);
+        await remember(
+          actor.id,
+          projectId,
+          "assistant",
+          turn.text,
+          turn.model,
+          turn.toolCalls.map((call) => ({ name: call.name, args: call.args, result: call.result })),
+        );
+
+        send("done", {
+          text: turn.text,
+          /* The tools it used, so the interface can show its work rather than
+             asking the user to trust an unsourced answer. */
+          usedTools: turn.toolCalls.map((call) => ({
+            name: call.name,
+            args: call.args,
+            /* Sent so the chat can show its work the way a task thread does —
+               what was asked and what came back, not just which tools ran. */
+            result: call.result,
+          })),
+          /* What this turn actually dispatched, read from the tool's own result
+             rather than from the model's prose — it does not reliably quote the
+             id back, and a card the interface only draws when the sentence
+             happens to mention one is a card that mostly does not appear. */
+          dispatched: turn.toolCalls.flatMap((call) =>
+            call.name === "create_task"
+              ? [...call.result.matchAll(/\[([0-9a-f-]{8,})\]/gi)].map((m) => m[1])
+              : [],
+          ),
+          usage: turn.usage,
+          model: turn.model,
+        });
+      } catch (err) {
+        if (err instanceof NoProviderError) {
+          send("error", { error: err.message });
+        } else if (err instanceof ProviderError) {
+          send("error", { error: err.message, retryable: err.retryable });
+        } else {
+          /* Headers are already out, so we cannot answer 500 — report it as an
+             error frame and log it the way the global handler otherwise would. */
+          console.error("conductor /ask failed", err);
+          send("error", { error: "The Conductor hit an unexpected error." });
+        }
+      } finally {
+        try {
+          controller.close();
+        } catch {
+          /* Client already gone. */
+        }
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    },
+  });
 });

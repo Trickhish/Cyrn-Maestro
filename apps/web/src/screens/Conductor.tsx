@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError, type TaskSummary } from "../lib/api";
+import { api, ApiError, type ConductorProgress, type TaskSummary } from "../lib/api";
 import { Composer, type SlashCommand } from "../components/Composer";
 
 /* The conversation about all of them.
@@ -60,6 +60,9 @@ export function Conductor({
 }: ConductorProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
+  /* The live trail of what the current turn is doing, newest last. Reset at the
+     start of each turn and cleared when the answer lands. */
+  const [progress, setProgress] = useState<ConductorProgress[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
   /* Dispatched task ids already followed up on, so the automatic follow-up
@@ -119,16 +122,22 @@ export function Conductor({
   async function ask(question: string, silent = false) {
     if (!silent) setMessages((m) => [...m, { role: "user", content: question }]);
     setBusy(true);
+    setProgress([]);
 
     try {
-      const answer = await api.askConductor(question, [], {
-        projectId,
-        pinnedModel: pinnedModel || undefined,
-        pinnedModelList: pinnedModelList || undefined,
-        pinnedNodeId: pinnedNodeId || undefined,
-        conductorModel: conductorModel || undefined,
-        silent,
-      });
+      const answer = await api.askConductor(
+        question,
+        [],
+        {
+          projectId,
+          pinnedModel: pinnedModel || undefined,
+          pinnedModelList: pinnedModelList || undefined,
+          pinnedNodeId: pinnedNodeId || undefined,
+          conductorModel: conductorModel || undefined,
+          silent,
+        },
+        (event) => setProgress((p) => [...p, event]),
+      );
 
       const dispatched = answer.dispatched ?? [];
 
@@ -157,6 +166,7 @@ export function Conductor({
       ]);
     } finally {
       setBusy(false);
+      setProgress([]);
     }
   }
 
@@ -284,29 +294,19 @@ export function Conductor({
               )}
             </div>
 
-            <div
-              className={
-                message.error
-                  ? "text-[13px] text-bad-hi border border-[var(--border-warn)] bg-raised rounded-lg px-3 py-2"
-                  : "prose-msg whitespace-pre-wrap"
-              }
-            >
-              {message.role === "assistant" && !message.error ? (
-                <Linked
-                  text={message.content}
-                  tasks={tasks}
-                  onOpenTask={onOpenTask}
-                  /* A card for the same task is rendered right below, so the
-                     inline link would be the same thing said twice. */
-                  plainIds={message.dispatched}
-                />
-              ) : (
-                message.content
-              )}
-            </div>
+            {/* Work first, conclusion last: the tools ran before the answer was
+                written, so they read where they happened — with their result a
+                click away — rather than dangling under the reply that summarises
+                them. The dispatched card sits between the two as the visible
+                result of the create_task that produced it. */}
+            {message.role === "assistant" && message.usedTools?.length ? (
+              <div className="flex flex-col">
+                {message.usedTools.map((call, j) => (
+                  <ToolRow key={j} call={call} />
+                ))}
+              </div>
+            ) : null}
 
-            {/* The dispatched work itself, live and clickable, in the
-                conversation that started it. */}
             {message.dispatched?.map((id) => {
               const task = tasks.find((t) => t.id === id);
               return task ? (
@@ -322,24 +322,32 @@ export function Conductor({
               );
             })}
 
-            {/* Shows its work: which lookups the answer came from, so it is
-                not asking to be taken on trust. */}
-            {message.usedTools?.length ? (
-              <div className="flex flex-col">
-                {message.usedTools.map((call, j) => (
-                  <ToolRow key={j} call={call} />
-                ))}
+            {message.content ? (
+              <div
+                className={
+                  message.error
+                    ? "text-[13px] text-bad-hi border border-[var(--border-warn)] bg-raised rounded-lg px-3 py-2"
+                    : "prose-msg whitespace-pre-wrap"
+                }
+              >
+                {message.role === "assistant" && !message.error ? (
+                  <Linked
+                    text={message.content}
+                    tasks={tasks}
+                    onOpenTask={onOpenTask}
+                    /* A card for the same task is rendered right above, so the
+                       inline link would be the same thing said twice. */
+                    plainIds={message.dispatched}
+                  />
+                ) : (
+                  message.content
+                )}
               </div>
             ) : null}
           </div>
         ))}
 
-        {busy && (
-          <div className="flex items-center gap-2.5 max-w-[760px]">
-            <span className="dot dot-running" />
-            <span className="text-[13px] text-tertiary">Looking…</span>
-          </div>
-        )}
+        {busy && <LiveStatus progress={progress} />}
       </div>
 
       {/* At the bottom, where the conversation ends and a reply is typed —
@@ -426,6 +434,71 @@ function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
   );
 }
 
+
+/* Plain-language names for the conductor's tools, so the live status reads like
+   a sentence rather than a function call. Anything unmapped falls back to the
+   tool name with its underscores softened. */
+const TOOL_LABELS: Record<string, string> = {
+  create_task: "Dispatching a task",
+  get_task: "Reading a task",
+  list_tasks: "Listing tasks",
+  list_projects: "Listing projects",
+  list_model_lists: "Choosing a model profile",
+  project_knowledge: "Reading project knowledge",
+  remember: "Recording a note",
+  register_fact: "Recording a fact",
+  set_project_brief: "Setting the project brief",
+};
+
+function stepLabel(step: ConductorProgress): string {
+  if (step.phase === "thinking") return "Thinking";
+  const base = TOOL_LABELS[step.name] ?? step.name.replace(/_/g, " ");
+  return step.summary ? `${base}: ${step.summary}` : base;
+}
+
+/* The turn narrating itself while it runs.
+ *
+ * Each step arrives as it happens; the newest is live (a running dot), the ones
+ * before it are done (a faint check). It replaces the old single "Looking…" so
+ * a turn spending ten seconds on tool calls says what it is spending them on.
+ * The whole thing is torn down the moment the answer lands — this is the wait,
+ * not the record; the record is the tool rows on the finished message. */
+function LiveStatus({ progress }: { progress: ConductorProgress[] }) {
+  if (progress.length === 0) {
+    return (
+      <div className="flex items-center gap-2.5 max-w-[760px]">
+        <span className="dot dot-running" />
+        <span className="text-[13px] text-tertiary">Looking…</span>
+      </div>
+    );
+  }
+
+  /* Only the tail: a long turn should not push the conversation off-screen with
+     its own scaffolding. */
+  const shown = progress.slice(-8);
+
+  return (
+    <div className="flex flex-col gap-1.5 max-w-[760px]">
+      {shown.map((step, i) => {
+        const active = i === shown.length - 1;
+        return (
+          <div key={i} className="flex items-center gap-2.5">
+            <span className="w-3 flex-none flex justify-center">
+              {active ? (
+                <span className="dot dot-running" />
+              ) : (
+                <span className="text-plan text-[11px] leading-none">✓</span>
+              )}
+            </span>
+            <span className={`text-[13px] truncate ${active ? "text-secondary" : "text-faint"}`}>
+              {stepLabel(step)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 /* What the Conductor actually did to answer, in the order it did it.
  *

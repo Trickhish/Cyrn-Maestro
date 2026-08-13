@@ -58,6 +58,24 @@ export interface ConductorTurn {
   model: string;
 }
 
+/* What the Conductor is doing right now, streamed to the chat so a turn that
+   takes ten seconds of tool calls says what it is spending them on rather than
+   just "Looking…". "thinking" is a model turn, "tool" is one call about to run. */
+export type ConductorProgress =
+  | { phase: "thinking" }
+  | { phase: "tool"; name: string; summary?: string };
+
+/* The one argument worth showing next to a tool name — a task's prompt, a
+   profile name, a note. The same idea the chat's ToolRow uses, here so the
+   live status can say "Dispatching: fix the flaky test" not just a tool name. */
+function summarizeArgs(args: unknown): string | undefined {
+  const a = (args ?? {}) as Record<string, unknown>;
+  const v = [a.prompt, a.title, a.modelList, a.model, a.taskId, a.query, a.text, a.value, a.label].find(
+    (x) => typeof x === "string" && x,
+  );
+  return typeof v === "string" ? v : undefined;
+}
+
 /* Threading the project into the tools is not enough on its own: the tools
    then default correctly, but the model has no idea which project it is
    sitting on, so it asks the user "which one?" or calls list_projects for a
@@ -134,6 +152,7 @@ export async function askConductor(
   question: string,
   signal?: AbortSignal,
   context: ConductorContext = {},
+  onProgress?: (event: ConductorProgress) => void,
 ): Promise<ConductorTurn> {
   const provider = await conductorProvider(actor, context);
 
@@ -150,6 +169,7 @@ export async function askConductor(
   /* Bounded: a read-only question that needs more than a handful of lookups is
      a question the model has misunderstood, and looping costs real money. */
   for (let turn = 0; turn < 6; turn++) {
+    onProgress?.({ phase: "thinking" });
     let turnText = "";
     const calls: Array<{ id: string; name: string; argumentsJson: string }> = [];
 
@@ -202,6 +222,7 @@ export async function askConductor(
         /* Hand the error back and let it correct itself, same as the agent loop. */
       }
 
+      onProgress?.({ phase: "tool", name: call.name, summary: summarizeArgs(args) });
       const result = await runConductorTool(actor, call.name, args, context);
       toolCalls.push({ name: call.name, args, result });
 
