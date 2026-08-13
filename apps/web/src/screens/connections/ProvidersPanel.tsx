@@ -64,7 +64,8 @@ export function ProvidersPanel({
               <button
                 type="button"
                 className="btn btn-chip"
-                disabled={busy === provider.id}
+                disabled={Boolean(busy)}
+                title="Re-read the model list, and probe a sample of it."
                 onClick={async () => {
                   setBusy(provider.id);
                   try {
@@ -77,6 +78,7 @@ export function ProvidersPanel({
               >
                 {busy === provider.id ? "Probing…" : "Refresh"}
               </button>
+              <TestAll provider={provider} busy={Boolean(busy)} setBusy={setBusy} onChanged={onChanged} />
               <RemoveProvider providerId={provider.id} onRemoved={onChanged} />
             </div>
 
@@ -563,5 +565,98 @@ function OwnerDrawer({
         </div>
       )}
     </div>
+  );
+}
+
+/* Probe every model, not the sample a normal refresh takes.
+ *
+ * A refresh caps probing deliberately: one real API call per model is fine for
+ * twenty and absurd for several hundred. But the cap leaves most of a large
+ * catalogue carrying no verdict at all, which is exactly the state that let a
+ * whole dead upstream look fine — so there has to be a way to ask properly,
+ * and it belongs on a button someone presses rather than a default.
+ *
+ * Confirmed first because the cost is real and proportional to the catalogue:
+ * one call per model, and on a 379-model gateway that is minutes of waiting
+ * and 379 billable requests. The count is in the button so nobody has to
+ * guess how big "all" is. */
+function TestAll({
+  provider,
+  busy,
+  setBusy,
+  onChanged,
+}: {
+  provider: Provider;
+  busy: boolean;
+  setBusy: (id: string | undefined) => void;
+  onChanged: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState<string>();
+  const [running, setRunning] = useState(false);
+
+  if (running) {
+    return (
+      <span className="font-mono text-[10.5px] text-accent-hi">
+        Testing {provider.models.length}…
+      </span>
+    );
+  }
+
+  if (result) {
+    return (
+      <button
+        type="button"
+        className="font-mono text-[10.5px] text-tertiary hover:text-primary"
+        title="Click to dismiss"
+        onClick={() => setResult(undefined)}
+      >
+        {result}
+      </button>
+    );
+  }
+
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        className="btn btn-chip"
+        disabled={busy}
+        title={`Probe all ${provider.models.length} models — one API call each, so this takes a while.`}
+        onClick={() => setConfirming(true)}
+      >
+        Test all
+      </button>
+    );
+  }
+
+  return (
+    <span className="flex items-center gap-1.5">
+      <button
+        type="button"
+        className="btn btn-chip btn-warn"
+        disabled={busy}
+        onClick={async () => {
+          setConfirming(false);
+          setRunning(true);
+          setBusy(provider.id);
+          try {
+            const r = await api.refreshProvider(provider.id, "all");
+            setResult(`${r.usable}/${r.count} usable`);
+            onChanged();
+          } catch (err) {
+            setResult(err instanceof ApiError ? err.message : "Testing failed");
+          } finally {
+            setRunning(false);
+            setBusy(undefined);
+          }
+        }}
+      >
+        Test {provider.models.length}?
+      </button>
+      <button type="button" className="btn btn-chip" onClick={() => setConfirming(false)}>
+        Cancel
+      </button>
+    </span>
   );
 }

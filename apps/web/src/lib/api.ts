@@ -437,8 +437,13 @@ export const api = {
   providers: () => request<{ providers: Provider[] }>("/providers"),
   addProvider: (body: { name: string; kind: string; baseUrl: string; apiKey: string }) =>
     post<{ provider: Provider }>("/providers", body),
-  refreshProvider: (id: string) =>
-    post<{ count: number; usable: number; removed: number }>(`/providers/${id}/refresh`),
+  /* `probe: "all"` tries every model rather than the capped sample a normal
+     refresh takes — one real API call per model, so it is slow and deliberate
+     rather than something to run on a timer. */
+  refreshProvider: (id: string, probe?: "all" | "none") =>
+    post<{ count: number; usable: number; probed: number; unprobed: number; removed: number }>(
+      `/providers/${id}/refresh${probe === "all" ? "?probe=all" : probe === "none" ? "?probe=0" : ""}`,
+    ),
   /* Turns a whole upstream on or off — every model that provider serves on
      this connection, in one call. */
   setOwnerEnabled: (providerId: string, ownedBy: string, enabled: boolean) =>
