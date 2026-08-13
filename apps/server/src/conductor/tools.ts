@@ -7,7 +7,7 @@ import { isRunning } from "../tasks/runner";
 import { createTask } from "../tasks/create";
 import { resolveModelList } from "../providers/gateway";
 import { can, projectScope, taskScope } from "../lib/permissions";
-import { getKnowledge } from "../projects/knowledge";
+import { getKnowledge, setBrief, upsertFact, addMemory } from "../projects/knowledge";
 import type { ToolDefinition } from "../providers/types";
 import type { Actor } from "../lib/auth";
 
@@ -83,6 +83,23 @@ const ProjectKnowledge = z.object({
     .describe("Defaults to the project this conversation is about, if any."),
 });
 
+const Remember = z.object({
+  text: z.string().min(1).describe("The thing worth remembering, in a sentence."),
+  projectId: z.string().optional(),
+});
+
+const RegisterFact = z.object({
+  kind: z.enum(["directory", "url", "port"]),
+  label: z.string().optional().describe('What it is — "root", "staging", "dev server".'),
+  value: z.string().min(1),
+  projectId: z.string().optional(),
+});
+
+const SetBrief = z.object({
+  text: z.string().min(1).describe("What this project is, in a short paragraph."),
+  projectId: z.string().optional(),
+});
+
 const CreateTask = z
   .object({
     prompt: z.string().min(1).describe("What the worker model should do."),
@@ -112,6 +129,9 @@ export const CONDUCTOR_SCHEMAS = {
   spend_report: SpendReport,
   list_model_lists: ListModelLists,
   project_knowledge: ProjectKnowledge,
+  remember: Remember,
+  register_fact: RegisterFact,
+  set_project_brief: SetBrief,
   create_task: CreateTask,
 } as const;
 
@@ -128,6 +148,12 @@ const DESCRIPTIONS: Record<ConductorToolName, string> = {
     "List the model profiles set up for this project: a name and when to use it. Check this before choosing a model for create_task.",
   project_knowledge:
     "Read what a project has on record about itself: its brief, where it is checked out on each machine, and the facts and notes agents have registered. Read this before answering questions about a project, and again after a task was asked to fill it in.",
+  remember:
+    "Write a note to the project's knowledge, yourself, right now. Use this for anything worth remembering — do not dispatch a task to do it.",
+  register_fact:
+    "Record a directory, URL or port on the project, yourself. Do not dispatch a task to do it.",
+  set_project_brief:
+    "Set what this project is, in a short paragraph. Replaces the current brief.",
   create_task: "Dispatch a new task to a worker model. Pin a model, name a modelList, or leave both unset to use the project's default routing.",
 };
 
@@ -174,6 +200,12 @@ export async function runConductorTool(
       return listModelLists(actor, context);
     case "project_knowledge":
       return projectKnowledge(actor, parsed.data as z.infer<typeof ProjectKnowledge>, context);
+    case "remember":
+      return writeKnowledge(actor, context, parsed.data as { text: string; projectId?: string }, "remember");
+    case "register_fact":
+      return writeKnowledge(actor, context, parsed.data as never, "fact");
+    case "set_project_brief":
+      return writeKnowledge(actor, context, parsed.data as never, "brief");
     case "create_task":
       return createTaskTool(actor, parsed.data as z.infer<typeof CreateTask>, context);
   }
@@ -576,4 +608,40 @@ async function createTaskTool(
       ? err.message
       : "Could not dispatch that task.";
   }
+}
+
+
+/* The Conductor writing to the project itself.
+ *
+ * It used to dispatch a whole task to record one sentence, because reading
+ * knowledge was all it could do — a worker, a node, a model call and a minute
+ * of waiting to write a note. These are plain database writes on the server,
+ * the same shape as every other tool here, so it just does them. Dispatching
+ * is for work that needs a machine. */
+async function writeKnowledge(
+  actor: Actor,
+  context: ConductorContext,
+  args: { text?: string; kind?: "directory" | "url" | "port"; label?: string; value?: string; projectId?: string },
+  kind: "remember" | "fact" | "brief",
+): Promise<string> {
+  const projectId = args.projectId ?? context.projectId;
+  if (!projectId) return "No project — pass a projectId (use list_projects to find one).";
+
+  const scope = await projectScope(projectId);
+  if (!scope || !(await can(actor, "task.run", scope))) {
+    return "That project doesn't exist, or isn't yours.";
+  }
+
+  if (kind === "remember") {
+    await addMemory(projectId, args.text!);
+    return `Noted: ${args.text}`;
+  }
+
+  if (kind === "brief") {
+    await setBrief(projectId, args.text!);
+    return "Brief set.";
+  }
+
+  await upsertFact(projectId, args.kind!, args.label ?? args.kind!, args.value!, null);
+  return `Recorded ${args.kind}${args.label ? ` "${args.label}"` : ""}: ${args.value}`;
 }
