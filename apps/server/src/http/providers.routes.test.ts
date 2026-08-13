@@ -590,3 +590,132 @@ describe("testing one upstream's models", () => {
     expect((await test1(strangerCookie, "antigravity")).status).toBe(404);
   });
 });
+
+/* Several ids routinely point at one underlying model — "cc/claude-opus-5"
+ * and "claude/claude-opus-5" behind two prefixes. Collapsing them is
+ * automatic, which makes the guards the important part: it must never turn
+ * off a model a list depends on, and repeated refreshes must settle. */
+describe("collapsing aliases of the same model", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  function offering(entries: Array<{ id: string; root?: string }>) {
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: entries }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("{}", { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+  }
+
+  const refresh = () =>
+    app.request(`/api/providers/${providerId}/refresh?probe=0`, withCookie(cookie, { method: "POST" }));
+
+  const enabledOf = async (modelId: string) =>
+    (
+      await db
+        .select({ enabled: schema.models.enabled })
+        .from(schema.models)
+        .where(and(eq(schema.models.providerId, providerId), eq(schema.models.modelId, modelId)))
+        .limit(1)
+    )[0]?.enabled;
+
+  test("keeps one id per root and disables the rest", async () => {
+    offering([
+      { id: "cc/opus", root: "opus" },
+      { id: "claude/opus", root: "opus" },
+      { id: "solo", root: "solo" },
+    ]);
+
+    const res = await refresh();
+    expect((await body<{ collapsed: number }>(res)).collapsed).toBe(1);
+
+    const enabled = (await Promise.all([enabledOf("cc/opus"), enabledOf("claude/opus")])).filter(Boolean);
+    expect(enabled).toHaveLength(1);
+    /* An unaliased model is never touched. */
+    expect(await enabledOf("solo")).toBe(true);
+  });
+
+  /* The guard that matters most: the conductor profile names specific ids, and
+     collapsing the wrong one would break routing with nothing said. */
+  test("never disables a model a list names", async () => {
+    offering([
+      { id: "cc/opus", root: "opus" },
+      { id: "claude/opus", root: "opus" },
+    ]);
+    await refresh();
+
+    const listId = crypto.randomUUID();
+    const [user] = await db.select().from(schema.users).limit(1);
+    await db.insert(schema.modelLists).values({
+      id: listId, ownerUserId: user.id, ownerOrgId: null,
+      name: "manager/conductor", description: null, createdAt: Date.now(),
+    });
+    await db.insert(schema.modelListEntries).values({
+      id: crypto.randomUUID(), listId, modelId: "claude/opus", groupId: null, position: 0, createdAt: Date.now(),
+    });
+    /* Put it back on, as a user would after noticing. */
+    await db.update(schema.models).set({ enabled: true }).where(eq(schema.models.modelId, "claude/opus"));
+
+    await refresh();
+    expect(await enabledOf("claude/opus")).toBe(true);
+  });
+
+  test("a model a group names is protected too", async () => {
+    offering([
+      { id: "cc/opus", root: "opus" },
+      { id: "claude/opus", root: "opus" },
+    ]);
+    await refresh();
+
+    const [user] = await db.select().from(schema.users).limit(1);
+    const groupId = crypto.randomUUID();
+    await db.insert(schema.modelGroups).values({
+      id: groupId, ownerUserId: user.id, ownerOrgId: null, name: "Opus", createdAt: Date.now(),
+    });
+    await db.insert(schema.modelGroupMembers).values({
+      id: crypto.randomUUID(), groupId, modelId: "claude/opus", position: 0, createdAt: Date.now(),
+    });
+    await db.update(schema.models).set({ enabled: true }).where(eq(schema.models.modelId, "claude/opus"));
+
+    await refresh();
+    expect(await enabledOf("claude/opus")).toBe(true);
+  });
+
+  /* Effort variants share a parent, not a root, and are real choices. */
+  test("leaves effort variants alone", async () => {
+    offering([
+      { id: "opus", root: "opus" },
+      { id: "opus-high", root: "opus-high" },
+      { id: "opus-low", root: "opus-low" },
+    ]);
+
+    expect((await body<{ collapsed: number }>(await refresh())).collapsed).toBe(0);
+    expect(await enabledOf("opus-high")).toBe(true);
+    expect(await enabledOf("opus-low")).toBe(true);
+  });
+
+  /* Repeated refreshes must settle rather than flip which alias survives. */
+  test("is stable across refreshes", async () => {
+    offering([
+      { id: "cc/opus", root: "opus" },
+      { id: "claude/opus", root: "opus" },
+    ]);
+    await refresh();
+    const first = await enabledOf("cc/opus");
+
+    expect((await body<{ collapsed: number }>(await refresh())).collapsed).toBe(0);
+    expect(await enabledOf("cc/opus")).toBe(first);
+  });
+
+  test("a provider that reports no root collapses nothing", async () => {
+    offering([{ id: "a" }, { id: "b" }]);
+    expect((await body<{ collapsed: number }>(await refresh())).collapsed).toBe(0);
+    expect(await enabledOf("a")).toBe(true);
+    expect(await enabledOf("b")).toBe(true);
+  });
+});

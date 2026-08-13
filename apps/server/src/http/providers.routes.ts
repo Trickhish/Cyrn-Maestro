@@ -201,10 +201,14 @@ providerRoutes.post("/:id/refresh", async (c) => {
          that predates this column would stay ungrouped until each model
          happened to be re-added. Kept current rather than set once: a proxy
          can move a model between upstreams. */
-      if (model.ownedBy) {
+      if (model.ownedBy || model.root || model.parent) {
         await db
           .update(schema.models)
-          .set({ ownedBy: model.ownedBy })
+          .set({
+            ...(model.ownedBy ? { ownedBy: model.ownedBy } : {}),
+            ...(model.root ? { root: model.root } : {}),
+            ...(model.parent ? { parent: model.parent } : {}),
+          })
           .where(and(eq(schema.models.providerId, row.id), eq(schema.models.modelId, model.id)));
       }
     }
@@ -226,6 +230,8 @@ providerRoutes.post("/:id/refresh", async (c) => {
         .returning({ id: schema.models.id });
       removed = gone.length;
     }
+
+    const collapsed = await collapseAliases(row.id, models);
 
     let usable = models.length;
     let probed = 0;
@@ -324,6 +330,7 @@ providerRoutes.post("/:id/refresh", async (c) => {
       /* Said out loud: a refresh that quietly drops models is worse than one
          that explains it, especially the first time a big catalogue shrinks. */
       removed,
+      collapsed,
     });
   } catch (err) {
     await db
@@ -341,6 +348,80 @@ providerRoutes.post("/:id/refresh", async (c) => {
 /* How many models a refresh will verify before giving up on the rest. Chosen so
    an ordinary provider is fully checked while a gateway advertising hundreds
    does not turn a button press into five minutes and a rate limit. */
+/* Several ids routinely point at one underlying model — "cc/claude-opus-5"
+ * and "claude/claude-opus-5" are the same thing behind two prefixes, and on a
+ * real gateway that is fifty-odd redundant entries cluttering every picker.
+ * `root` is what the provider itself says they have in common, so it is the
+ * honest basis for collapsing them.
+ *
+ * Not `parent`: that links an effort variant to its base ("-low", "-high"),
+ * and those are genuinely different models someone picks between deliberately.
+ * Collapsing on parent would throw away the choice.
+ *
+ * The alias is disabled rather than deleted, so it stays visible, keeps its
+ * settings, and can be switched back on. Which one survives, in order:
+ *
+ *   1. One a model list or group already names. Those were chosen by hand, and
+ *      disabling one would silently break a profile the router depends on.
+ *   2. One already enabled, so a refresh does not move a working choice.
+ *   3. One known to work.
+ *   4. Shortest id, then alphabetical — arbitrary but stable, so repeated
+ *      refreshes settle rather than flip-flopping. */
+async function collapseAliases(
+  providerId: string,
+  offered: Array<{ id: string; root?: string }>,
+): Promise<number> {
+  const roots = new Map<string, string[]>();
+  for (const model of offered) {
+    if (!model.root) continue;
+    roots.set(model.root, [...(roots.get(model.root) ?? []), model.id]);
+  }
+
+  const contested = [...roots.values()].filter((ids) => ids.length > 1);
+  if (contested.length === 0) return 0;
+
+  const rows = await db
+    .select({ modelId: schema.models.modelId, enabled: schema.models.enabled, probeOk: schema.models.probeOk })
+    .from(schema.models)
+    .where(eq(schema.models.providerId, providerId));
+  const state = new Map(rows.map((r) => [r.modelId, r]));
+
+  /* Every model id any list or group names, whoever owns it: a model in use is
+     not a duplicate to be tidied away. */
+  const [listed, grouped] = await Promise.all([
+    db.select({ modelId: schema.modelListEntries.modelId }).from(schema.modelListEntries),
+    db.select({ modelId: schema.modelGroupMembers.modelId }).from(schema.modelGroupMembers),
+  ]);
+  const spokenFor = new Set(
+    [...listed, ...grouped].map((r) => r.modelId).filter((id): id is string => Boolean(id)),
+  );
+
+  const rank = (id: string): number =>
+    (spokenFor.has(id) ? 0 : 8) +
+    (state.get(id)?.enabled ? 0 : 4) +
+    (state.get(id)?.probeOk === true ? 0 : 2);
+
+  let collapsed = 0;
+  for (const ids of contested) {
+    const [keep, ...aliases] = [...ids].sort(
+      (a, b) => rank(a) - rank(b) || a.length - b.length || a.localeCompare(b),
+    );
+    void keep;
+
+    for (const alias of aliases) {
+      /* Never silently drop one a list depends on, even as a runner-up. */
+      if (spokenFor.has(alias) || state.get(alias)?.enabled === false) continue;
+      await db
+        .update(schema.models)
+        .set({ enabled: false })
+        .where(and(eq(schema.models.providerId, providerId), eq(schema.models.modelId, alias)));
+      collapsed++;
+    }
+  }
+
+  return collapsed;
+}
+
 const PROBE_LIMIT = 40;
 
 /* Which models are worth the probe budget. The router prefers the tier a task

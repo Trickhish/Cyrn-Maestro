@@ -66,6 +66,10 @@ export interface ModelInfo {
      connection here but many upstreams, and that is the grouping that matters
      when one of them goes down or costs more than the rest. */
   ownedBy?: string;
+  /* The underlying model several ids may share, and the base an effort
+     variant descends from. */
+  root?: string;
+  parent?: string;
 }
 
 export interface ProviderAdapter {

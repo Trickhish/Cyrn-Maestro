@@ -68,6 +68,8 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       /* Standard on /v1/models, and the only thing in the response that says
          which upstream a proxied model actually comes from. */
       ownedBy: typeof m.owned_by === "string" && m.owned_by ? m.owned_by : undefined,
+      root: typeof m.root === "string" && m.root ? m.root : undefined,
+      parent: typeof m.parent === "string" && m.parent ? m.parent : undefined,
     }));
   }
 

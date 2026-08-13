@@ -243,6 +243,13 @@ export const models = sqliteTable(
        A proxy in front of a dozen vendors is one connection but many
        providers, and that is the grouping worth seeing and turning off. */
     ownedBy: text("owned_by"),
+    /* The underlying model, as the gateway reports it. Several ids routinely
+       point at one root — "cc/claude-opus-5" and "claude/claude-opus-5" are
+       the same model behind two prefixes — and that is the duplication worth
+       collapsing. `parent`, by contrast, links an effort variant to its base
+       ("-low", "-high"), which are genuinely different and kept apart. */
+    root: text("root"),
+    parent: text("parent"),
     /* USD per million tokens. Null when neither the provider nor the price
        table knows one — the UI says "unpriced" rather than quietly showing
        $0.00, because an unpriced model accrues no spend and so slips past
