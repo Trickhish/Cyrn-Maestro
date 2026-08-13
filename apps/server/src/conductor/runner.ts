@@ -1,6 +1,12 @@
 import { eq } from "drizzle-orm";
 import { db, schema } from "../db";
-import { resolveProvider, modelListMembers } from "../providers/gateway";
+import {
+  resolveProvider,
+  modelListMembers,
+  noteModelFailed,
+  noteModelWorked,
+} from "../providers/gateway";
+import { ProviderError } from "../providers/types";
 import { can, projectScope, type Scope } from "../lib/permissions";
 import { conductorToolDefinitions, runConductorTool, type ConductorContext } from "./tools";
 import type { Actor } from "../lib/auth";
@@ -143,22 +149,34 @@ export async function askConductor(
     let turnText = "";
     const calls: Array<{ id: string; name: string; argumentsJson: string }> = [];
 
-    for await (const event of provider.adapter.stream(
-      {
-        model: provider.model,
-        messages,
-        tools: conductorToolDefinitions(),
-        maxTokens: 2048,
-        reasoningEffort: provider.reasoningEffort,
-      },
-      signal,
-    )) {
-      if (event.type === "text") turnText += event.delta;
-      if (event.type === "tool_call") calls.push(event.call);
-      if (event.type === "usage") {
-        usage.inputTokens += event.inputTokens;
-        usage.outputTokens += event.outputTokens;
+    /* Reported for the same reason a task's calls are: the Conductor's own
+       profile resolves on what the router believes is usable, so a model that
+       has lost its credentials has to be able to say so — otherwise the
+       profile keeps picking it and the chat is dead until someone digs. */
+    try {
+      for await (const event of provider.adapter.stream(
+        {
+          model: provider.model,
+          messages,
+          tools: conductorToolDefinitions(),
+          maxTokens: 2048,
+          reasoningEffort: provider.reasoningEffort,
+        },
+        signal,
+      )) {
+        if (event.type === "text") turnText += event.delta;
+        if (event.type === "tool_call") calls.push(event.call);
+        if (event.type === "usage") {
+          usage.inputTokens += event.inputTokens;
+          usage.outputTokens += event.outputTokens;
+        }
       }
+      void noteModelWorked(provider.model);
+    } catch (err) {
+      if (err instanceof ProviderError) {
+        void noteModelFailed(provider.model, err.status, err.message);
+      }
+      throw err;
     }
 
     if (calls.length === 0) {

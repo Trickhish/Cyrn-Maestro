@@ -6,6 +6,8 @@ import {
   resolveProvider,
   resolveModelList,
   modelListMembers,
+  noteModelFailed,
+  noteModelWorked,
   toolDefinitions,
   estimateCost,
   NoProviderError,
@@ -305,6 +307,91 @@ describe("resolving a model list", () => {
       const result = await modelListMembers({ ownerUserId: ALICE }, "nope");
       expect(result).toEqual({ error: expect.stringContaining("No model list named") });
     });
+  });
+});
+
+/* Probing happens when a provider is added and then never again, so a model
+ * that has since lost its credentials keeps its old verdict and every list
+ * resolving on it keeps handing work to something that cannot run it. The
+ * calls themselves are the only thing that knows. */
+describe("what a real call teaches us about a model", () => {
+  const stateOf = async (modelId: string) =>
+    (
+      await db
+        .select({ probeOk: schema.models.probeOk, probeError: schema.models.probeError })
+        .from(schema.models)
+        .where(eq(schema.models.modelId, modelId))
+        .limit(1)
+    )[0];
+
+  test("no credentials takes it out of the running", async () => {
+    await giveProvider(ALICE, ["dead"]);
+    await noteModelFailed("dead", 404, "No active credentials for provider: antigravity");
+
+    const state = await stateOf("dead");
+    expect(state.probeOk).toBe(false);
+    expect(state.probeError).toContain("No active credentials");
+  });
+
+  test("a list stops resolving to it", async () => {
+    await giveProvider(ALICE, ["dead", "alive"]);
+    const listId = crypto.randomUUID();
+    await db.insert(schema.modelLists).values({
+      id: listId, ownerUserId: ALICE, ownerOrgId: null, name: "normal programming", description: null, createdAt: Date.now(),
+    });
+    await db.insert(schema.modelListEntries).values([
+      { id: crypto.randomUUID(), listId, modelId: "dead", groupId: null, position: 0, createdAt: Date.now() },
+      { id: crypto.randomUUID(), listId, modelId: "alive", groupId: null, position: 1, createdAt: Date.now() },
+    ]);
+
+    expect(await resolveModelList({ ownerUserId: ALICE }, "normal programming")).toEqual({
+      modelId: "dead",
+    });
+
+    await noteModelFailed("dead", 404, "No active credentials");
+
+    expect(await resolveModelList({ ownerUserId: ALICE }, "normal programming")).toEqual({
+      modelId: "alive",
+    });
+  });
+
+  /* A rate limit or a 5xx is the provider having a moment, and a 400 is our
+     own request being wrong. Neither says the model does not work, and
+     demoting on them would empty a list over a bad afternoon. */
+  test("a transient failure or a bad request changes nothing", async () => {
+    await giveProvider(ALICE, ["busy"]);
+    for (const status of [429, 500, 503, 400]) {
+      await noteModelFailed("busy", status, "boom");
+      expect((await stateOf("busy")).probeOk).not.toBe(false);
+    }
+  });
+
+  /* Fixing the credentials upstream has to be enough — nobody should have to
+     remember which models Maestro quietly gave up on. */
+  test("a call that works puts it back", async () => {
+    await giveProvider(ALICE, ["recovered"]);
+    await noteModelFailed("recovered", 401, "no key");
+    expect((await stateOf("recovered")).probeOk).toBe(false);
+
+    await noteModelWorked("recovered");
+    const state = await stateOf("recovered");
+    expect(state.probeOk).toBe(true);
+    expect(state.probeError).toBeNull();
+  });
+
+  /* The same model can be offered by more than one connection, and it is the
+     model that is dead, not the row. */
+  test("every row offering that model hears about it", async () => {
+    await giveProvider(ALICE, ["shared"]);
+    await giveProvider(BOB, ["shared"]);
+    await noteModelFailed("shared", 404, "gone");
+
+    const rows = await db
+      .select({ probeOk: schema.models.probeOk })
+      .from(schema.models)
+      .where(eq(schema.models.modelId, "shared"));
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.probeOk === false)).toBe(true);
   });
 });
 

@@ -1,4 +1,11 @@
-import { candidatesFor, resolveProvider, toolDefinitions, type ResolvedProvider } from "../providers/gateway";
+import {
+  candidatesFor,
+  resolveProvider,
+  toolDefinitions,
+  noteModelFailed,
+  noteModelWorked,
+  type ResolvedProvider,
+} from "../providers/gateway";
 import type { ToolDefinition } from "../providers/types";
 import { ProviderError, type ChatMessage, type StreamEvent } from "../providers/types";
 import { append } from "./events";
@@ -87,12 +94,21 @@ export async function* streamWithFailover(
         events.push(event);
       }
 
+      /* It ran, so whatever we thought was wrong with it no longer is. */
+      void noteModelWorked(provider.model);
       yield* events;
       return;
     } catch (err) {
       lastError = err;
 
       if (signal.aborted) return;
+
+      /* Told once, so the router stops choosing it and lists resolve past it
+         until it works again. Without this the same dead model is picked for
+         every task, forever. */
+      if (err instanceof ProviderError) {
+        void noteModelFailed(provider.model, err.status, err.message);
+      }
 
       /* A request the provider rejected as malformed will be rejected by the
          next one too. Only transient failures are worth another attempt. */

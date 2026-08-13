@@ -86,6 +86,44 @@ export async function candidatesFor(owner: OwnerScope, firstChoice: string): Pro
   return [firstChoice, ...fallbacks];
 }
 
+/* What a real call just taught us about a model.
+ *
+ * Probing happens when a provider is added and then never again, so a model
+ * that has since lost its credentials keeps its old verdict forever — and a
+ * list resolving on `probeOk !== false` keeps handing work to something that
+ * cannot run it. Every failure the router has no way to hear about is a
+ * failure it repeats. So the calls themselves report back.
+ *
+ * Only the verdicts a retry cannot change: no credentials, no such model, not
+ * allowed. A rate limit or a 5xx is the provider having a moment, and a 400 is
+ * our own request being wrong — neither says anything about whether the model
+ * works. Recorded against every row with that id, since the same model can be
+ * offered by more than one connection.
+ *
+ * Reversible on purpose: the first call that succeeds clears it again, so
+ * fixing the credentials upstream is enough and nobody has to remember which
+ * models Maestro quietly gave up on. */
+const UNUSABLE_STATUSES = new Set([401, 403, 404]);
+
+export async function noteModelFailed(modelId: string, status: number, detail: string): Promise<void> {
+  if (!UNUSABLE_STATUSES.has(status)) return;
+
+  /* Unconditional, deliberately: `probe_ok != 0` is NULL for a model that was
+     never probed, so guarding on it would skip exactly the rows most likely to
+     be wrong — the ones nothing has ever checked. */
+  await db
+    .update(schema.models)
+    .set({ probeOk: false, probeError: detail.slice(0, 300), probedAt: Date.now() })
+    .where(eq(schema.models.modelId, modelId));
+}
+
+export async function noteModelWorked(modelId: string): Promise<void> {
+  await db
+    .update(schema.models)
+    .set({ probeOk: true, probeError: null, probedAt: Date.now() })
+    .where(and(eq(schema.models.modelId, modelId), eq(schema.models.probeOk, false)));
+}
+
 /* Resolves a named model list to one concrete, currently-usable model id —
  * walking entries in preference order and, for a group entry, that group's
  * own members in their order, until one is actually connected, enabled and
