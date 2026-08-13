@@ -349,12 +349,27 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
           return;
         }
 
+        /* MCP names are namespaced with a double underscore, and models
+           routinely write one — "web_tools_dns_lookup" for
+           "web_tools__dns_lookup". The call then falls through to the node,
+           which has never heard of it and answers with its own six tools, so
+           a working integration looks broken. Matching the name the model
+           almost certainly meant is cheaper than a turn spent correcting it,
+           and unambiguous: a single candidate or nothing. */
+        const mcpName = resolveMcpName(call.name, mcp.tools);
+
         if (call.name === LOAD_SKILL_TOOL.name) {
           await loadSkillCall(taskId, task.nodeId!, call, skills);
         } else if (isKnowledgeTool(call.name)) {
           await runKnowledgeTool(taskId, project.id, task.nodeId!, call);
-        } else if (isMcpTool(call.name) && mcp.tools.some((t) => t.qualifiedName === call.name)) {
-          await mcpCall(taskId, { ownerUserId: project.ownerUserId, ownerOrgId: project.ownerOrgId }, call, mcp.needsApproval, state);
+        } else if (mcpName) {
+          await mcpCall(
+            taskId,
+            { ownerUserId: project.ownerUserId, ownerOrgId: project.ownerOrgId },
+            { ...call, name: mcpName },
+            mcp.needsApproval,
+            state,
+          );
         } else {
           await executeCall(taskId, task.nodeId!, call, state);
         }
@@ -747,3 +762,20 @@ export function summarise(tool: ToolName, args: unknown): string {
 }
 
 export { NoProviderError, ProviderError };
+
+
+/* The MCP tool a call meant, if any.
+ *
+ * An exact match first. Failing that, one whose qualified name matches once
+ * every run of underscores is collapsed — which is exactly the mistake a model
+ * makes with a "__" namespace separator. Ambiguity is treated as no match: two
+ * candidates mean guessing, and guessing which remote tool to run is worse
+ * than saying the name was wrong. */
+export function resolveMcpName(name: string, tools: Array<{ qualifiedName: string }>): string | null {
+  if (tools.some((t) => t.qualifiedName === name)) return name;
+  if (!isMcpTool(name) && !name.includes("_")) return null;
+
+  const flat = (s: string) => s.replace(/_+/g, "_");
+  const matches = tools.filter((t) => flat(t.qualifiedName) === flat(name));
+  return matches.length === 1 ? matches[0].qualifiedName : null;
+}
