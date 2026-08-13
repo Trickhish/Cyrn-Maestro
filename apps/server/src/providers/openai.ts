@@ -65,6 +65,9 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           : typeof m.context_window === "number"
             ? m.context_window
             : undefined,
+      /* Standard on /v1/models, and the only thing in the response that says
+         which upstream a proxied model actually comes from. */
+      ownedBy: typeof m.owned_by === "string" && m.owned_by ? m.owned_by : undefined,
     }));
   }
 

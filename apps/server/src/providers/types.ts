@@ -61,6 +61,11 @@ export interface ModelInfo {
   contextWindow?: number;
   priceInPerMTok?: number;
   priceOutPerMTok?: number;
+  /* Who actually provides the model, as the gateway reports it — "anthropic",
+     "groq", "antigravity". A proxy in front of several vendors is one
+     connection here but many upstreams, and that is the grouping that matters
+     when one of them goes down or costs more than the rest. */
+  ownedBy?: string;
 }
 
 export interface ProviderAdapter {

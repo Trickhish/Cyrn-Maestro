@@ -94,6 +94,9 @@ providerRoutes.get("/", async (c) => {
              hiding it and leaving the user wondering where it went. */
           probeOk: schema.models.probeOk,
           probeError: schema.models.probeError,
+          /* What the models are grouped by: one connection to a proxy can
+             front a dozen upstreams, and they fail and cost separately. */
+          ownedBy: schema.models.ownedBy,
         })
         .from(schema.models)
         .where(eq(schema.models.providerId, row.id)),
@@ -184,6 +187,7 @@ providerRoutes.post("/:id/refresh", async (c) => {
           tier: inferTier(model.id),
           tierSource: "inferred",
           contextWindow: model.contextWindow ?? null,
+          ownedBy: model.ownedBy ?? null,
           /* A price the provider published wins; otherwise the name is used,
              because a model with no price accrues no spend and slips past
              every cap. */
@@ -191,6 +195,18 @@ providerRoutes.post("/:id/refresh", async (c) => {
           enabled: true,
         })
         .onConflictDoNothing();
+
+      /* The insert above does nothing for a model already on file, so who
+         serves it would never reach an existing row — and every catalogue
+         that predates this column would stay ungrouped until each model
+         happened to be re-added. Kept current rather than set once: a proxy
+         can move a model between upstreams. */
+      if (model.ownedBy) {
+        await db
+          .update(schema.models)
+          .set({ ownedBy: model.ownedBy })
+          .where(and(eq(schema.models.providerId, row.id), eq(schema.models.modelId, model.id)));
+      }
     }
 
     /* A refresh is what the provider offers now, not everything it has ever
@@ -441,6 +457,53 @@ providerRoutes.patch("/:id/models/:modelId", async (c) => {
   }
 
   return c.json({ ok: true });
+});
+
+/* Turn a whole upstream on or off in one go.
+ *
+ * A connection to a proxy is one row here but many providers behind it, and
+ * they fail independently: when one loses its credentials, every model it
+ * serves is dead while the rest of the connection is fine. Disabling them one
+ * at a time is not a real option when there are twenty of them, and removing
+ * the connection would take the working ones with it. */
+const SetGroupEnabled = z.object({
+  ownedBy: z.string().min(1),
+  enabled: z.boolean(),
+});
+
+providerRoutes.patch("/:id/owners/:ownedBy", async (c) => {
+  const actor = requireActor(c);
+  const providerId = c.req.param("id");
+  const scope = await providerScope(providerId);
+  if (!scope) throw new NotFound();
+  await assertCan(actor, "provider.manage", scope);
+
+  const parsed = SetGroupEnabled.safeParse({
+    ownedBy: decodeURIComponent(c.req.param("ownedBy")),
+    ...(await c.req.json().catch(() => ({}))),
+  });
+  if (!parsed.success) throw new BadRequest("Say whether to enable or disable it.");
+
+  const changed = await db
+    .update(schema.models)
+    .set({ enabled: parsed.data.enabled })
+    .where(
+      and(
+        eq(schema.models.providerId, providerId),
+        eq(schema.models.ownedBy, parsed.data.ownedBy),
+      ),
+    )
+    .returning({ id: schema.models.id });
+
+  await record(
+    scope.ownerOrgId ?? null,
+    actor,
+    parsed.data.enabled ? "provider.owner_enabled" : "provider.owner_disabled",
+    providerId,
+    { ownedBy: parsed.data.ownedBy, models: changed.length },
+  );
+
+  return c.json({ ok: true, models: changed.length });
 });
 
 /* Puts every model on this connection back to its automatic classification. */

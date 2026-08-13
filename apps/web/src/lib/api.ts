@@ -163,6 +163,9 @@ export interface ProviderModel {
   priceSource: "provider" | "inferred" | "manual" | null;
   probeOk: boolean | null;
   probeError: string | null;
+  /* Which upstream serves it, as the gateway reports it. Null for providers
+     that do not say, or for rows added before the field was captured. */
+  ownedBy: string | null;
 }
 
 export interface Provider {
@@ -435,7 +438,14 @@ export const api = {
   addProvider: (body: { name: string; kind: string; baseUrl: string; apiKey: string }) =>
     post<{ provider: Provider }>("/providers", body),
   refreshProvider: (id: string) =>
-    post<{ count: number; usable: number }>(`/providers/${id}/refresh`),
+    post<{ count: number; usable: number; removed: number }>(`/providers/${id}/refresh`),
+  /* Turns a whole upstream on or off — every model that provider serves on
+     this connection, in one call. */
+  setOwnerEnabled: (providerId: string, ownedBy: string, enabled: boolean) =>
+    request<{ ok: true; models: number }>(
+      `/providers/${providerId}/owners/${encodeURIComponent(ownedBy)}`,
+      { method: "PATCH", body: JSON.stringify({ enabled }) },
+    ),
   deleteProvider: (id: string) => request<{ ok: true }>(`/providers/${id}`, { method: "DELETE" }),
   setModelTier: (providerId: string, modelId: string, tier: string) =>
     request<{ ok: true }>(`/providers/${providerId}/models/${encodeURIComponent(modelId)}`, {

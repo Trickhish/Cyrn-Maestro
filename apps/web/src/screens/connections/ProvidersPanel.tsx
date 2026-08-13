@@ -100,11 +100,12 @@ export function ProvidersPanel({
 
               <BulkDisable providerId={provider.id} models={provider.models} onChanged={onChanged} />
 
-              {provider.models.map((model) => (
-                <ModelRow
-                  key={model.id}
+              {groupByOwner(provider.models).map(([owner, models]) => (
+                <OwnerDrawer
+                  key={owner}
                   providerId={provider.id}
-                  model={model}
+                  owner={owner}
+                  models={models}
                   onChanged={onChanged}
                 />
               ))}
@@ -464,5 +465,103 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
       {children}
       {hint && <span className="text-[11px] text-faint leading-snug">{hint}</span>}
     </label>
+  );
+}
+
+/* One connection to a proxy can front a dozen upstreams, and 379 models in one
+   flat list is not a list anyone reads. `owned_by` is the grouping the gateway
+   already gives us, and it is the one that matters operationally: upstreams
+   lose their credentials, rate-limit and cost independently of each other. */
+const UNGROUPED = "other";
+
+function groupByOwner(models: ProviderModel[]): Array<[string, ProviderModel[]]> {
+  const groups = new Map<string, ProviderModel[]>();
+  for (const model of models) {
+    const owner = model.ownedBy || UNGROUPED;
+    groups.set(owner, [...(groups.get(owner) ?? []), model]);
+  }
+
+  /* Biggest first, with the ungrouped remainder last however big it is —
+     "other" is where you look when the answer is not in a real group. */
+  return [...groups.entries()].sort(([a, ma], [b, mb]) => {
+    if (a === UNGROUPED) return 1;
+    if (b === UNGROUPED) return -1;
+    return mb.length - ma.length || a.localeCompare(b);
+  });
+}
+
+function OwnerDrawer({
+  providerId,
+  owner,
+  models,
+  onChanged,
+}: {
+  providerId: string;
+  owner: string;
+  models: ProviderModel[];
+  onChanged: () => void;
+}) {
+  /* Closed by default: the point of grouping several hundred models is that
+     you open the one you care about, not that you scroll past all of them. */
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const enabled = models.filter((m) => m.enabled).length;
+  const broken = models.filter((m) => m.probeOk === false).length;
+  const allOff = enabled === 0;
+
+  return (
+    <div className="border rule rounded-lg bg-surface overflow-hidden">
+      <div className="flex items-center gap-2.5 px-3 py-2">
+        <button
+          type="button"
+          className="flex items-center gap-2 flex-1 min-w-0 text-left"
+          onClick={() => setOpen(!open)}
+        >
+          <span className="text-faint text-[9px] w-2">{open ? "▾" : "▸"}</span>
+          <span className={`font-mono text-[12px] truncate ${allOff ? "text-faint" : "text-primary"}`}>
+            {owner}
+          </span>
+          <span className="font-mono text-[10.5px] text-tertiary tnum flex-none">
+            {enabled}/{models.length}
+          </span>
+          {/* Surfaced on the closed drawer, since a dead upstream is the whole
+              reason someone comes looking. */}
+          {broken > 0 && (
+            <span className="font-mono text-[10px] text-warn-hi flex-none">{broken} failing</span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          className="btn btn-chip"
+          disabled={busy}
+          title={
+            allOff
+              ? `Re-enable all ${models.length} models from ${owner}.`
+              : `Disable all ${models.length} models from ${owner} — the rest of this connection keeps working.`
+          }
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await api.setOwnerEnabled(providerId, owner, allOff);
+              onChanged();
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? "…" : allOff ? "Enable all" : "Disable all"}
+        </button>
+      </div>
+
+      {open && (
+        <div className="flex flex-col gap-1 px-3 pb-3">
+          {models.map((model) => (
+            <ModelRow key={model.id} providerId={providerId} model={model} onChanged={onChanged} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

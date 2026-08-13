@@ -239,6 +239,10 @@ export const models = sqliteTable(
       .notNull()
       .default("inferred"),
     contextWindow: integer("context_window"),
+    /* Which upstream actually serves this model, as the gateway reports it.
+       A proxy in front of a dozen vendors is one connection but many
+       providers, and that is the grouping worth seeing and turning off. */
+    ownedBy: text("owned_by"),
     /* USD per million tokens. Null when neither the provider nor the price
        table knows one — the UI says "unpriced" rather than quietly showing
        $0.00, because an unpriced model accrues no spend and so slips past

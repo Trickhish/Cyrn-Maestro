@@ -408,3 +408,87 @@ describe("refreshing a provider's models", () => {
     expect(theirs).toHaveLength(1);
   });
 });
+
+/* One connection to a proxy fronts many upstreams, and they fail, rate-limit
+ * and cost independently. Turning one off should not mean clicking through
+ * thirty models, and must not touch the rest of the connection. */
+describe("enabling and disabling a whole upstream", () => {
+  const setOwner = (c: string, ownedBy: string, enabled: boolean) =>
+    app.request(`/api/providers/${providerId}/owners/${encodeURIComponent(ownedBy)}`, {
+      method: "PATCH",
+      headers: { cookie: c, "content-type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+
+  async function seedOwned(rows: Array<{ id: string; ownedBy: string }>) {
+    for (const row of rows) {
+      await db.insert(schema.models).values({
+        id: crypto.randomUUID(), providerId, modelId: row.id, ownedBy: row.ownedBy,
+        tier: "standard", tierSource: "inferred", contextWindow: null,
+        priceInPerMTok: null, priceOutPerMTok: null, enabled: true, needsReasoningEffort: false,
+      });
+    }
+  }
+
+  const enabledOf = async (ownedBy: string) =>
+    (await db.select().from(schema.models).where(eq(schema.models.ownedBy, ownedBy)))
+      .filter((m) => m.enabled).length;
+
+  test("turns off every model that upstream serves", async () => {
+    await seedOwned([
+      { id: "a1", ownedBy: "antigravity" },
+      { id: "a2", ownedBy: "antigravity" },
+      { id: "g1", ownedBy: "groq" },
+    ]);
+
+    const res = await setOwner(cookie, "antigravity", false);
+    expect((await body(res)).models).toBe(2);
+    expect(await enabledOf("antigravity")).toBe(0);
+  });
+
+  /* The whole reason to group rather than remove the connection: the rest of
+     it keeps working while one upstream is down. */
+  test("leaves the other upstreams alone", async () => {
+    await seedOwned([{ id: "a1", ownedBy: "antigravity" }, { id: "g1", ownedBy: "groq" }]);
+    await setOwner(cookie, "antigravity", false);
+    expect(await enabledOf("groq")).toBe(1);
+  });
+
+  test("turns them back on again", async () => {
+    await seedOwned([{ id: "a1", ownedBy: "antigravity" }]);
+    await setOwner(cookie, "antigravity", false);
+    await setOwner(cookie, "antigravity", true);
+    expect(await enabledOf("antigravity")).toBe(1);
+  });
+
+  test("is recorded in the audit log", async () => {
+    await seedOwned([{ id: "a1", ownedBy: "antigravity" }]);
+    await setOwner(cookie, "antigravity", false);
+
+    const entries = await db
+      .select()
+      .from(schema.auditLog)
+      .where(eq(schema.auditLog.action, "provider.owner_disabled"));
+    expect(entries).toHaveLength(1);
+  });
+
+  test("another user cannot reach into your provider", async () => {
+    await seedOwned([{ id: "a1", ownedBy: "antigravity" }]);
+    await db.insert(schema.users).values({
+      id: "stranger-owner", email: "so@x.com",
+      passwordHash: await Bun.password.hash(PASSWORD, { algorithm: "argon2id" }),
+      instanceRole: "user", status: "active", createdAt: Date.now(),
+    });
+    const strangerCookie = cookieFrom(
+      await app.request("/api/auth/login", json({ email: "so@x.com", password: PASSWORD })),
+    );
+
+    expect((await setOwner(strangerCookie, "antigravity", false)).status).toBe(404);
+    expect(await enabledOf("antigravity")).toBe(1);
+  });
+
+  test("an upstream nobody serves changes nothing", async () => {
+    const res = await setOwner(cookie, "nonexistent", false);
+    expect((await body(res)).models).toBe(0);
+  });
+});
