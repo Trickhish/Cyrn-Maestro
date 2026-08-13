@@ -103,7 +103,12 @@ export interface NodeSummary {
   os: string | null;
   arch: string | null;
   capabilities: string[];
+  /* What applies — the fleet's setting when one has been made. */
   maxConcurrentTasks: number;
+  /* What the machine itself reports, and the override if any, so the
+     interface can explain a number that differs from the box's own config. */
+  reportedConcurrency: number;
+  concurrencyOverride: number | null;
   runningTasks: number;
   lastSeenAt: number | null;
   loadPercent: number | null;
@@ -410,6 +415,12 @@ export const api = {
     post<{ token: string; command: string; expiresInMs: number }>("/nodes/enroll", { projectId }),
   renameNode: (id: string, name: string) =>
     request<{ ok: true }>(`/nodes/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  /* null hands the machine back its own configured number. */
+  setNodeConcurrency: (id: string, maxConcurrentTasks: number | null) =>
+    request<{ ok: true }>(`/nodes/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ maxConcurrentTasks }),
+    }),
   revokeNode: (id: string) => request<{ ok: true }>(`/nodes/${id}`, { method: "DELETE" }),
 
   providers: () => request<{ providers: Provider[] }>("/providers"),

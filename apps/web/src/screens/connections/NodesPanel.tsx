@@ -85,6 +85,10 @@ export function NodesPanel({
             await api.renameNode(node.id, name);
             onChanged();
           }}
+          onSetConcurrency={async (max) => {
+            await api.setNodeConcurrency(node.id, max);
+            onChanged();
+          }}
         />
       ))}
 
@@ -101,11 +105,13 @@ function NodeRow({
   busy,
   onRevoke,
   onRename,
+  onSetConcurrency,
 }: {
   node: NodeSummary;
   busy: boolean;
   onRevoke: () => void;
   onRename: (name: string) => Promise<void>;
+  onSetConcurrency: (max: number | null) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(node.name);
@@ -174,12 +180,103 @@ function NodeRow({
         {node.capabilities.join(" · ")}
       </span>
       <span className="flex-1" />
-      <span className="font-mono text-[10.5px] text-tertiary tnum">
-        {node.runningTasks}/{node.maxConcurrentTasks} tasks
-      </span>
+      <Concurrency node={node} onSet={onSetConcurrency} />
       <button type="button" className="btn btn-chip" disabled={busy} onClick={onRevoke}>
         Revoke
       </button>
     </div>
+  );
+}
+
+/* How many tasks this machine will take at once.
+ *
+ * The number lives on the node, which is the right default — it knows its own
+ * cores. But changing it meant editing node.toml on the box and restarting,
+ * which is a lot of ceremony for one integer, so it is settable here and
+ * pushed down the open socket. The machine's own figure is kept visible
+ * alongside, or a number that does not match what is configured on the box
+ * looks like a bug. */
+function Concurrency({
+  node,
+  onSet,
+}: {
+  node: NodeSummary;
+  onSet: (max: number | null) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(String(node.maxConcurrentTasks));
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    const next = Number(value);
+    if (!Number.isInteger(next) || next < 1 || next > 64 || next === node.maxConcurrentTasks) {
+      setEditing(false);
+      setValue(String(node.maxConcurrentTasks));
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSet(next);
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <span className="flex items-center gap-1.5">
+        <input
+          autoFocus
+          type="number"
+          min={1}
+          max={64}
+          value={value}
+          disabled={saving}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            if (e.key === "Escape") {
+              setValue(String(node.maxConcurrentTasks));
+              setEditing(false);
+            }
+          }}
+          className="font-mono text-[11px] text-primary bg-canvas border rule-default rounded px-1.5 py-0.5 outline-none focus:border-[var(--border-accent)] w-[56px] tnum"
+        />
+        {node.concurrencyOverride != null && (
+          <button
+            type="button"
+            className="text-[11px] text-tertiary hover:text-primary"
+            disabled={saving}
+            /* onMouseDown, not onClick: the input's blur would commit and
+               close the editor before a click ever landed. */
+            onMouseDown={(e) => {
+              e.preventDefault();
+              void onSet(null).then(() => setEditing(false));
+            }}
+          >
+            use {node.reportedConcurrency}
+          </button>
+        )}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="font-mono text-[10.5px] text-tertiary tnum hover:text-primary hover:underline decoration-dotted underline-offset-2 disabled:no-underline disabled:cursor-default"
+      disabled={node.status === "revoked"}
+      onClick={() => setEditing(true)}
+      title={
+        node.concurrencyOverride != null
+          ? `Set here to ${node.concurrencyOverride}; this machine's own config says ${node.reportedConcurrency}. Click to change.`
+          : "How many tasks this machine takes at once. Click to change."
+      }
+    >
+      {node.runningTasks}/{node.maxConcurrentTasks} tasks
+      {node.concurrencyOverride != null && <span className="text-accent-hi"> ·set</span>}
+    </button>
   );
 }

@@ -169,6 +169,21 @@ export const NodeRegistered = z.object({
   id: z.string(),
   nodeId: z.string(),
   heartbeatIntervalMs: z.number().int(),
+  /* Set when the fleet has been given a concurrency for this machine that
+     differs from the one it reported. Absent means "your own config stands". */
+  maxConcurrentTasks: z.number().int().min(1).optional(),
+});
+
+/* Settings pushed to a node while it is connected.
+ *
+ * Concurrency is the machine's own business until someone says otherwise from
+ * the fleet page, and having to SSH to every box to change one number is what
+ * this avoids. Sent on change rather than polled, so it takes effect without
+ * waiting for a reconnect. */
+export const NodeConfigure = z.object({
+  type: z.literal("node.configure"),
+  id: z.string(),
+  maxConcurrentTasks: z.number().int().min(1),
 });
 
 export const NodeRejected = z.object({
@@ -248,6 +263,7 @@ export const ServerMessage = z.discriminatedUnion("type", [
   NodeEnrolled,
   NodeRegistered,
   NodeRejected,
+  NodeConfigure,
   WorkspaceProvision,
   TaskAssign,
   ToolCall,

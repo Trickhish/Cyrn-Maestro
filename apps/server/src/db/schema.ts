@@ -405,7 +405,13 @@ export const nodes = sqliteTable(
     arch: text("arch"),
     version: text("version"),
     capabilities: text("capabilities", { mode: "json" }).$type<string[]>().notNull().default([]),
+    /* What the node itself reports, refreshed on every register. */
     maxConcurrentTasks: integer("max_concurrent_tasks").notNull().default(2),
+    /* What the fleet was told to use instead, if anything. Kept apart from the
+       reported value rather than overwriting it, so a node reconnecting does
+       not silently undo the setting — and so clearing the override restores
+       the machine's own number rather than a guess at what it used to be. */
+    concurrencyOverride: integer("concurrency_override"),
     lastSeenAt: integer("last_seen_at"),
     loadPercent: real("load_percent"),
     createdAt: now(),

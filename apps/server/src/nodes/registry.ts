@@ -79,6 +79,19 @@ export function renameLiveNode(nodeId: string, name: string): void {
   if (node) node.name = name;
 }
 
+/* Applies a concurrency setting to a connected node: the live entry the
+   router reads for capacity, and the node itself so it stops refusing
+   assignments its own config would have capped. Both, or the two disagree and
+   the router dispatches into a refusal. */
+export function setLiveConcurrency(nodeId: string, maxConcurrentTasks: number): void {
+  const node = live.get(nodeId);
+  if (!node) return;
+  node.maxConcurrentTasks = maxConcurrentTasks;
+  node.socket.send(
+    JSON.stringify({ type: "node.configure", id: newId(), maxConcurrentTasks } satisfies ServerMessage),
+  );
+}
+
 export function sendToNode(nodeId: string, message: ServerMessage): boolean {
   const node = live.get(nodeId);
   if (!node) return false;
@@ -325,7 +338,9 @@ async function register(
     assigned: new Set(runningTaskIds),
     reported: new Set(runningTaskIds),
     lastSeenAt: Date.now(),
-    maxConcurrentTasks: identity.maxConcurrentTasks,
+    /* The fleet's setting outranks the machine's own, and survives the
+       reconnect that would otherwise put the reported number back. */
+    maxConcurrentTasks: row.concurrencyOverride ?? identity.maxConcurrentTasks,
   });
 
   await db
@@ -347,6 +362,7 @@ async function register(
       id: newId(),
       nodeId: row.id,
       heartbeatIntervalMs: config.heartbeatIntervalMs,
+      ...(row.concurrencyOverride ? { maxConcurrentTasks: row.concurrencyOverride } : {}),
     } satisfies ServerMessage),
   );
 

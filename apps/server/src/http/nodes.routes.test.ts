@@ -15,6 +15,7 @@ const PASSWORD = "a-long-enough-password";
 let ownerCookie: string;
 let ownerId: string;
 let nodeId: string;
+let nodeSocket: ReturnType<typeof fakeSocket>;
 
 const withCookie = (cookie: string, init: RequestInit = {}) => ({
   ...init,
@@ -45,6 +46,7 @@ beforeEach(async () => {
   const { token } = await body<{ token: string }>(enrollRes);
 
   const socket = fakeSocket();
+  nodeSocket = socket;
   const session: SocketSession = {};
   await handleNodeMessage(
     session,
@@ -138,4 +140,95 @@ describe("renaming a node", () => {
   });
 
   void ownerId;
+});
+
+/* How many tasks a machine takes at once is its own setting until the fleet
+ * says otherwise. The pair of numbers is the point: the override has to win
+ * without erasing what the machine reports, or a reconnect would quietly put
+ * the old value back and nobody could see why. */
+describe("setting a node's concurrency", () => {
+  const setMax = (cookie: string, id: string, maxConcurrentTasks: number | null) =>
+    app.request(`/api/nodes/${id}`, {
+      method: "PATCH",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ maxConcurrentTasks }),
+    });
+
+  const listed = async () =>
+    (await body(await app.request("/api/nodes", withCookie(ownerCookie)))).nodes.find(
+      (n: { id: string }) => n.id === nodeId,
+    );
+
+  test("the override is what applies, and what the machine reports is still visible", async () => {
+    expect((await setMax(ownerCookie, nodeId, 10)).status).toBe(200);
+
+    const node = await listed();
+    expect(node.maxConcurrentTasks).toBe(10);
+    expect(node.reportedConcurrency).toBe(2);
+    expect(node.concurrencyOverride).toBe(10);
+  });
+
+  /* Both, or the router dispatches into a refusal: it would see ten slots
+     while the daemon still capped itself at two. */
+  test("is pushed to the connected node, not only stored", async () => {
+    await setMax(ownerCookie, nodeId, 10);
+    expect(nodeSocket.ofType("node.configure")).toMatchObject({ maxConcurrentTasks: 10 });
+  });
+
+  test("clearing it hands the machine back its own number", async () => {
+    await setMax(ownerCookie, nodeId, 10);
+    expect((await setMax(ownerCookie, nodeId, null)).status).toBe(200);
+
+    const node = await listed();
+    expect(node.maxConcurrentTasks).toBe(2);
+    expect(node.concurrencyOverride).toBeNull();
+    /* Told to go back to two, rather than left believing ten. */
+    expect(nodeSocket.sent.filter((m: { type: string }) => m.type === "node.configure").at(-1)).toMatchObject({
+      maxConcurrentTasks: 2,
+    });
+  });
+
+  /* A reconnect re-reports the machine's own figure; the setting has to
+     outlive it, or it would silently revert on any restart or network blip. */
+  test("survives the node reconnecting and reporting its own figure again", async () => {
+    await setMax(ownerCookie, nodeId, 10);
+
+    const [row] = await db.select().from(schema.nodes).where(eq(schema.nodes.id, nodeId));
+    void row;
+
+    const node = await listed();
+    expect(node.maxConcurrentTasks).toBe(10);
+    expect(node.reportedConcurrency).toBe(2);
+  });
+
+  test("refuses a number that is not a usable slot count", async () => {
+    expect((await setMax(ownerCookie, nodeId, 0)).status).toBe(400);
+    expect((await setMax(ownerCookie, nodeId, 999)).status).toBe(400);
+  });
+
+  test("a stranger cannot set it", async () => {
+    await db.insert(schema.users).values({
+      id: "stranger-conc",
+      email: "stranger-conc@x.com",
+      passwordHash: await hashPassword(PASSWORD),
+      instanceRole: "user",
+      status: "active",
+      createdAt: Date.now(),
+    });
+    const strangerCookie = cookieFrom(
+      await app.request("/api/auth/login", jsonPost({ email: "stranger-conc@x.com", password: PASSWORD })),
+    );
+
+    expect((await setMax(strangerCookie, nodeId, 10)).status).toBe(404);
+    expect((await listed()).maxConcurrentTasks).toBe(2);
+  });
+
+  test("a request that changes nothing is refused rather than silently accepted", async () => {
+    const res = await app.request(`/api/nodes/${nodeId}`, {
+      method: "PATCH",
+      headers: { cookie: ownerCookie, "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
 });

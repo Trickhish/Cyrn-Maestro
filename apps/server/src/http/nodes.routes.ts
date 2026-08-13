@@ -3,7 +3,13 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db";
 import { config } from "../config";
-import { createEnrollmentToken, revokeNode, getLiveNode, renameLiveNode } from "../nodes/registry";
+import {
+  createEnrollmentToken,
+  revokeNode,
+  getLiveNode,
+  renameLiveNode,
+  setLiveConcurrency,
+} from "../nodes/registry";
 import { assertCan, nodeScope, projectScope } from "../lib/permissions";
 import { record } from "../lib/audit";
 import { BadRequest, NotFound, requireActor, activeScope, type Env } from "./context";
@@ -36,7 +42,13 @@ nodeRoutes.get("/", async (c) => {
         arch: row.arch,
         version: row.version,
         capabilities: row.capabilities,
-        maxConcurrentTasks: row.maxConcurrentTasks,
+        /* What actually applies — the fleet's setting when there is one. */
+        maxConcurrentTasks: row.concurrencyOverride ?? row.maxConcurrentTasks,
+        /* Kept apart so the interface can say "8 (machine reports 2)" rather
+           than leaving someone wondering why the number is not what they set
+           on the box. */
+        reportedConcurrency: row.maxConcurrentTasks,
+        concurrencyOverride: row.concurrencyOverride,
         runningTasks: live ? Math.max(live.assigned.size, live.reported.size) : 0,
         lastSeenAt: row.lastSeenAt,
         loadPercent: row.loadPercent,
@@ -80,32 +92,61 @@ nodeRoutes.post("/enroll", async (c) => {
   });
 });
 
-const RenameNode = z.object({ name: z.string().trim().min(1).max(60) });
-
 /* Renaming does not touch the daemon at all — it is a label on the record, not
    an identity change. The install-time name (the hostname, or an explicit
    --name) is often not the name someone wants to see in a list of five nodes,
-   and there is no reason renaming should require reinstalling. */
+   and there is no reason renaming should require reinstalling.
+ *
+ * Concurrency does reach the daemon: it is the machine's own setting until the
+ * fleet overrides it, and having to SSH to every box to change one number is
+ * what this avoids. Null clears the override and hands the machine back its
+ * own config. */
+const UpdateNode = z
+  .object({
+    name: z.string().trim().min(1).max(60).optional(),
+    maxConcurrentTasks: z.number().int().min(1).max(64).nullish(),
+  })
+  .refine((v) => v.name !== undefined || v.maxConcurrentTasks !== undefined, {
+    message: "Nothing to change.",
+  });
+
 nodeRoutes.patch("/:id", async (c) => {
   const actor = requireActor(c);
-  const scope = await nodeScope(c.req.param("id"));
+  const nodeId = c.req.param("id");
+  const scope = await nodeScope(nodeId);
   if (!scope) throw new NotFound();
   await assertCan(actor, "node.revoke", scope);
 
-  const parsed = RenameNode.safeParse(await c.req.json().catch(() => ({})));
-  if (!parsed.success) throw new BadRequest("Give it a name.");
+  const parsed = UpdateNode.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) throw new BadRequest(parsed.error.issues[0]?.message ?? "Nothing to change.");
 
   const updated = await db
     .update(schema.nodes)
-    .set({ name: parsed.data.name })
-    .where(eq(schema.nodes.id, c.req.param("id")))
-    .returning({ id: schema.nodes.id });
+    .set({
+      ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+      ...(parsed.data.maxConcurrentTasks !== undefined
+        ? { concurrencyOverride: parsed.data.maxConcurrentTasks }
+        : {}),
+    })
+    .where(eq(schema.nodes.id, nodeId))
+    .returning({ id: schema.nodes.id, reported: schema.nodes.maxConcurrentTasks });
   if (updated.length === 0) throw new NotFound();
 
-  renameLiveNode(c.req.param("id"), parsed.data.name);
-  await record(scope.ownerOrgId ?? null, actor, "node.renamed", c.req.param("id"), {
-    name: parsed.data.name,
-  });
+  if (parsed.data.name !== undefined) {
+    renameLiveNode(nodeId, parsed.data.name);
+    await record(scope.ownerOrgId ?? null, actor, "node.renamed", nodeId, { name: parsed.data.name });
+  }
+
+  if (parsed.data.maxConcurrentTasks !== undefined) {
+    /* Clearing hands the machine back its own reported number, rather than a
+       guess at what it used to be. */
+    const effective = parsed.data.maxConcurrentTasks ?? updated[0].reported;
+    setLiveConcurrency(nodeId, effective);
+    await record(scope.ownerOrgId ?? null, actor, "node.concurrency_changed", nodeId, {
+      maxConcurrentTasks: parsed.data.maxConcurrentTasks,
+      effective,
+    });
+  }
 
   return c.json({ ok: true });
 });

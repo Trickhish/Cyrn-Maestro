@@ -203,6 +203,10 @@ export class NodeClient {
       case "node.registered": {
         this.setState("online");
         console.log(`Connected to ${this.config.serverUrl}`);
+        /* The fleet's setting outranks this machine's own config, and arrives
+           on every reconnect — so a value set in Maestro survives a restart
+           here without anyone editing node.toml. */
+        if (message.maxConcurrentTasks) this.applyConcurrency(message.maxConcurrentTasks);
         /* Also an identity: a machine that was already enrolled is set up, and
            an installer re-run on it should finish rather than time out. */
         this.options.onIdentified?.();
@@ -215,6 +219,12 @@ export class NodeClient {
             loadPercent: undefined,
           });
         }, message.heartbeatIntervalMs);
+        break;
+      }
+
+      /* Changed from the fleet page while this socket is open. */
+      case "node.configure": {
+        this.applyConcurrency(message.maxConcurrentTasks);
         break;
       }
 
@@ -284,6 +294,15 @@ export class NodeClient {
       case "ping":
         break;
     }
+  }
+
+  /* Held in memory only. node.toml stays the machine's own answer for when it
+     runs against a server that has no opinion; writing the fleet's value into
+     it would quietly make a remote setting look like a local one. */
+  private applyConcurrency(max: number): void {
+    if (this.config.maxConcurrentTasks === max) return;
+    console.log(`Concurrency set to ${max} by the server (was ${this.config.maxConcurrentTasks}).`);
+    this.config.maxConcurrentTasks = max;
   }
 
   private async acceptTask(taskId: string, projectId: string, workspacePath: string): Promise<void> {
