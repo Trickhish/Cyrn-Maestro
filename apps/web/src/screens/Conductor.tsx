@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, type ConductorProgress, type TaskSummary } from "../lib/api";
 import { Composer, type SlashCommand } from "../components/Composer";
+import { Markdown } from "../components/Markdown";
 
 /* The conversation about all of them.
  *
@@ -308,26 +309,36 @@ export function Conductor({
             })}
 
             {message.content ? (
-              <div
-                className={
-                  message.error
-                    ? "text-[13px] text-bad-hi border border-[var(--border-warn)] bg-raised rounded-lg px-3 py-2"
-                    : "prose-msg whitespace-pre-wrap"
-                }
-              >
-                {message.role === "assistant" && !message.error ? (
-                  <Linked
-                    text={message.content}
-                    tasks={tasks}
-                    onOpenTask={onOpenTask}
-                    /* A card for the same task is rendered right above, so the
-                       inline link would be the same thing said twice. */
-                    plainIds={message.dispatched}
-                  />
-                ) : (
-                  message.content
-                )}
-              </div>
+              message.role === "assistant" && !message.error ? (
+                /* Rendered as markdown because that is what models write, with
+                   task ids linked inside the plain runs — see `Linked`, which
+                   markdown has no syntax of its own for. */
+                <Markdown
+                  className="prose-msg flex flex-col gap-2"
+                  text={message.content}
+                  plain={(text, key) => (
+                    <Linked
+                      key={key}
+                      text={text}
+                      tasks={tasks}
+                      onOpenTask={onOpenTask}
+                      /* A card for the same task is rendered right above, so the
+                         inline link would be the same thing said twice. */
+                      plainIds={message.dispatched}
+                    />
+                  )}
+                />
+              ) : (
+                <div
+                  className={
+                    message.error
+                      ? "text-[13px] text-bad-hi border border-[var(--border-warn)] bg-raised rounded-lg px-3 py-2"
+                      : "prose-msg whitespace-pre-wrap"
+                  }
+                >
+                  {message.content}
+                </div>
+              )
             ) : null}
           </div>
         ))}

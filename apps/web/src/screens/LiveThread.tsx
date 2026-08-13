@@ -3,6 +3,7 @@ import { useNarrow } from "../lib/useNarrow";
 import { api, type TaskStatus } from "../lib/api";
 import { useTaskStream, type ThreadItem, type ToolEntry } from "../lib/useTaskStream";
 import { Composer } from "../components/Composer";
+import { Markdown } from "../components/Markdown";
 
 /* The task thread, driven by the real event log.
  *
@@ -137,10 +138,12 @@ function Item({ item, taskId }: { item: ThreadItem; taskId: string }) {
             <span className="speaker">agent</span>
             {item.model && <span className="font-mono text-[10px] text-plan">{item.model}</span>}
           </div>
-          <p className="prose-msg whitespace-pre-wrap">
-            {item.text}
-            {item.streaming && <span className="caret">▌</span>}
-          </p>
+          {/* Markdown because that is what the agent writes. Rendered while it
+              streams too: a half-finished token simply has not matched yet and
+              resolves as the rest arrives, which reads better than the text
+              reflowing all at once at the end. */}
+          <Markdown className="prose-msg flex flex-col gap-2" text={item.text} />
+          {item.streaming && <span className="caret">▌</span>}
         </div>
       );
 

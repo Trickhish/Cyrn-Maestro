@@ -16,5 +16,9 @@
     "skipLibCheck": true,
     "types": ["vite/client"]
   },
-  "include": ["src", "vite.config.ts"]
+  /* Test files are typechecked by `bun test`, which supplies its own globals
+     and matcher types; the web app does not depend on @types/bun, so including
+     them in this pass would fail on `bun:test`. */
+  "include": ["src", "vite.config.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }
