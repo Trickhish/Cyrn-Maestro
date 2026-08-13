@@ -2,7 +2,14 @@ import { expect, test, describe, beforeAll, beforeEach } from "bun:test";
 import { db, schema } from "../db";
 import { encryptSecret } from "../lib/crypto";
 import { eq } from "drizzle-orm";
-import { resolveProvider, resolveModelList, toolDefinitions, estimateCost, NoProviderError } from "./gateway";
+import {
+  resolveProvider,
+  resolveModelList,
+  modelListMembers,
+  toolDefinitions,
+  estimateCost,
+  NoProviderError,
+} from "./gateway";
 import { resetDatabase } from "../test/harness";
 import { TOOL_NAMES } from "@maestro/protocol";
 
@@ -241,6 +248,63 @@ describe("resolving a model list", () => {
 
     const result = await resolveModelList({ ownerUserId: BOB }, "normal programming");
     expect(result).toEqual({ error: expect.stringContaining("No model list named") });
+  });
+
+  /* Resolving is what dispatch needs; the whole set is what a picker needs,
+     and what constrains an override to the list the user actually chose. */
+  describe("its full membership", () => {
+    test("is every usable entry, in the list's own order", async () => {
+      await giveProvider(ALICE, ["first", "second"]);
+      await makeList("manager/conductor", [{ modelId: "first" }, { modelId: "second" }]);
+
+      expect(await modelListMembers({ ownerUserId: ALICE }, "manager/conductor")).toEqual({
+        models: ["first", "second"],
+      });
+    });
+
+    test("leaves out entries that are not currently usable", async () => {
+      await giveProvider(ALICE, ["up", "down"]);
+      await db.update(schema.models).set({ probeOk: false }).where(eq(schema.models.modelId, "down"));
+      await makeList("manager/conductor", [{ modelId: "down" }, { modelId: "up" }]);
+
+      expect(await modelListMembers({ ownerUserId: ALICE }, "manager/conductor")).toEqual({
+        models: ["up"],
+      });
+    });
+
+    /* A group stands in for one model, so it contributes its own first usable
+       member rather than every variant of the same thing. */
+    test("a group contributes one model, not all of its members", async () => {
+      await giveProvider(ALICE, ["opus-a", "opus-b", "plain"]);
+
+      const groupId = crypto.randomUUID();
+      await db.insert(schema.modelGroups).values({
+        id: groupId, ownerUserId: ALICE, ownerOrgId: null, name: "Claude Opus", createdAt: Date.now(),
+      });
+      await db.insert(schema.modelGroupMembers).values([
+        { id: crypto.randomUUID(), groupId, modelId: "opus-a", position: 0, createdAt: Date.now() },
+        { id: crypto.randomUUID(), groupId, modelId: "opus-b", position: 1, createdAt: Date.now() },
+      ]);
+      await makeList("manager/conductor", [{ groupId }, { modelId: "plain" }]);
+
+      expect(await modelListMembers({ ownerUserId: ALICE }, "manager/conductor")).toEqual({
+        models: ["opus-a", "plain"],
+      });
+    });
+
+    test("an empty result is not an error, so the caller can fall back", async () => {
+      await giveProvider(ALICE, ["something"]);
+      await makeList("manager/conductor", [{ modelId: "not-connected" }]);
+
+      expect(await modelListMembers({ ownerUserId: ALICE }, "manager/conductor")).toEqual({
+        models: [],
+      });
+    });
+
+    test("a list that does not exist is still an error", async () => {
+      const result = await modelListMembers({ ownerUserId: ALICE }, "nope");
+      expect(result).toEqual({ error: expect.stringContaining("No model list named") });
+    });
   });
 });
 

@@ -97,6 +97,21 @@ export async function resolveModelList(
   owner: OwnerScope,
   listName: string,
 ): Promise<{ modelId: string } | { error: string }> {
+  const members = await modelListMembers(owner, listName);
+  if ("error" in members) return members;
+  return members.models.length > 0
+    ? { modelId: members.models[0] }
+    : { error: `No model in "${listName}" is currently available.` };
+}
+
+/* Every currently-usable model a list resolves to, in its own preference
+   order — the same walk resolveModelList does, without stopping at the first
+   hit. Resolving is what dispatch needs; the whole set is what a picker needs,
+   and what constrains an override to the list the user actually chose. */
+export async function modelListMembers(
+  owner: OwnerScope,
+  listName: string,
+): Promise<{ models: string[] } | { error: string }> {
   const [list] = await db
     .select()
     .from(schema.modelLists)
@@ -137,9 +152,10 @@ export async function resolveModelList(
     (await usableModelsFor(owner)).filter((m) => m.probeOk !== false).map((m) => m.modelId),
   );
 
+  const models: string[] = [];
   for (const entry of entries) {
     if (entry.modelId) {
-      if (usable.has(entry.modelId)) return { modelId: entry.modelId };
+      if (usable.has(entry.modelId)) models.push(entry.modelId);
       continue;
     }
     if (entry.groupId) {
@@ -148,12 +164,14 @@ export async function resolveModelList(
         .from(schema.modelGroupMembers)
         .where(eq(schema.modelGroupMembers.groupId, entry.groupId))
         .orderBy(schema.modelGroupMembers.position);
+      /* A group stands in for one model, so it contributes its own first
+         usable member and not every variant of the same thing. */
       const member = members.find((m) => usable.has(m.modelId));
-      if (member) return { modelId: member.modelId };
+      if (member) models.push(member.modelId);
     }
   }
 
-  return { error: `No model in "${listName}" is currently available.` };
+  return { models: [...new Set(models)] };
 }
 
 /* Owner scope, not actor. The member running the task is irrelevant to which

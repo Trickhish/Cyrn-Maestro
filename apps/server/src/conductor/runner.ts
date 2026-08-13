@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db, schema } from "../db";
-import { resolveProvider, resolveModelList } from "../providers/gateway";
+import { resolveProvider, modelListMembers } from "../providers/gateway";
 import { can, projectScope, type Scope } from "../lib/permissions";
 import { conductorToolDefinitions, runConductorTool, type ConductorContext } from "./tools";
 import type { Actor } from "../lib/auth";
@@ -95,18 +95,20 @@ export async function conductorProvider(actor: Actor, context: ConductorContext)
   const scope =
     project && (await can(actor, "task.run", project)) ? project : personal;
 
-  if (context.conductorModel) {
-    try {
-      return await resolveProvider(scope, context.conductorModel);
-    } catch {
-      /* An override naming something unreachable should not be fatal either. */
-    }
-  }
+  const profile = await modelListMembers(scope, CONDUCTOR_LIST_NAME);
+  const members = "models" in profile ? profile.models : [];
 
-  const resolved = await resolveModelList(scope, CONDUCTOR_LIST_NAME);
-  if ("modelId" in resolved) {
+  /* An override is a choice within the profile, not a way around it: the
+     list is what says which models are fit to coordinate, and honouring a
+     name outside it would make that list advisory. Anything else falls back
+     to the profile's own first choice rather than erroring, since a stale
+     pick must not be able to wedge the Conductor. */
+  const wanted = context.conductorModel;
+  const picked = wanted && members.includes(wanted) ? wanted : members[0];
+
+  if (picked) {
     try {
-      return await resolveProvider(scope, resolved.modelId);
+      return await resolveProvider(scope, picked);
     } catch {
       /* Listed but unreachable right now — fall through to the default. */
     }

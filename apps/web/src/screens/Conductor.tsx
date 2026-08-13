@@ -39,6 +39,8 @@ interface ConductorProps {
   pinnedModel?: string;
   pinnedModelList?: string;
   pinnedNodeId?: string;
+  /* Forces which model the Conductor itself reasons on, within its profile. */
+  conductorModel?: string;
   /* Rendered between the composer and the thread — the routing chips live
      here so the one input on the page keeps its routing controls. */
   under?: React.ReactNode;
@@ -52,6 +54,7 @@ export function Conductor({
   pinnedModel,
   pinnedModelList,
   pinnedNodeId,
+  conductorModel,
   under,
   onDispatched,
 }: ConductorProps) {
@@ -89,6 +92,7 @@ export function Conductor({
         pinnedModel: pinnedModel || undefined,
         pinnedModelList: pinnedModelList || undefined,
         pinnedNodeId: pinnedNodeId || undefined,
+        conductorModel: conductorModel || undefined,
       });
 
       const dispatched = answer.dispatched ?? [];

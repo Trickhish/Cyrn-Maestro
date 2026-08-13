@@ -29,6 +29,7 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [model, setModel] = useState<string>("");
   const [modelList, setModelList] = useState<string>("");
+  const [conductorModel, setConductorModel] = useState<string>("");
   const [nodeId, setNodeId] = useState<string>("");
   const [tab, setTab] = useState<"tasks" | "settings">("tasks");
   const [error, setError] = useState<string>();
@@ -101,6 +102,7 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
           pinnedModel={model || undefined}
           pinnedModelList={modelList || undefined}
           pinnedNodeId={nodeId || undefined}
+          conductorModel={conductorModel || undefined}
           onDispatched={() => void refresh()}
           under={
             <>
@@ -115,9 +117,11 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
                 pinnedNodeId={nodeId || undefined}
                 pinnedModel={model || undefined}
                 pinnedModelList={modelList || undefined}
+                conductorModel={conductorModel || undefined}
                 onPinNode={(id) => setNodeId(id ?? "")}
                 onPinModel={(m) => setModel(m ?? "")}
                 onPinModelList={(name) => setModelList(name ?? "")}
+                onPickConductorModel={(m) => setConductorModel(m ?? "")}
               />
 
               {online.length === 0 && (

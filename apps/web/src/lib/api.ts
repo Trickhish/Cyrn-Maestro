@@ -501,6 +501,13 @@ export const api = {
       usage: { inputTokens: number; outputTokens: number };
       model: string;
     }>("/conductor/ask", { question, history, ...scope }),
+
+  /* The models the Conductor itself may run on: its profile's usable members,
+     best first. The picker offers only these. */
+  conductorModels: (projectId?: string) =>
+    request<{ profile: string; models: string[] }>(
+      `/conductor/models${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`,
+    ),
 };
 
 /* ------------------------------------------------------------------ events */

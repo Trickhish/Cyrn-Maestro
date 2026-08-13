@@ -157,20 +157,40 @@ describe("which model the Conductor itself runs on", () => {
     expect((await conductorProvider(alice, {})).model).toBe("only-model");
   });
 
-  test("an explicit override beats the profile", async () => {
-    await giveProvider({ ownerUserId: "alice" }, ["coordinator", "forced"]);
-    await giveList({ ownerUserId: "alice" }, CONDUCTOR_LIST_NAME, ["coordinator"]);
+  /* Forcing a model is a choice within the profile, not around it — the list
+     is what says which models are fit to coordinate, and honouring a name
+     outside it would make that list advisory. */
+  test("an override picks a later member of the profile", async () => {
+    await giveProvider({ ownerUserId: "alice" }, ["first", "second"]);
+    await giveList({ ownerUserId: "alice" }, CONDUCTOR_LIST_NAME, ["first", "second"]);
 
-    const provider = await conductorProvider(alice, { conductorModel: "forced" });
-    expect(provider.model).toBe("forced");
+    expect((await conductorProvider(alice, { conductorModel: "second" })).model).toBe("second");
   });
 
-  test("an override naming something unreachable falls back rather than failing", async () => {
+  test("an override naming a model outside the profile is ignored", async () => {
+    await giveProvider({ ownerUserId: "alice" }, ["coordinator", "not-in-profile"]);
+    await giveList({ ownerUserId: "alice" }, CONDUCTOR_LIST_NAME, ["coordinator"]);
+
+    expect((await conductorProvider(alice, { conductorModel: "not-in-profile" })).model).toBe(
+      "coordinator",
+    );
+  });
+
+  /* A pick that has since gone down, or a profile that was edited under it,
+     must not be able to wedge the Conductor. */
+  test("an override naming something unreachable falls back to the profile", async () => {
     await giveProvider({ ownerUserId: "alice" }, ["coordinator"]);
     await giveList({ ownerUserId: "alice" }, CONDUCTOR_LIST_NAME, ["coordinator"]);
 
-    const provider = await conductorProvider(alice, { conductorModel: "nonexistent" });
-    expect(provider.model).toBe("coordinator");
+    expect((await conductorProvider(alice, { conductorModel: "nonexistent" })).model).toBe(
+      "coordinator",
+    );
+  });
+
+  test("an override is ignored when there is no profile at all", async () => {
+    await giveProvider({ ownerUserId: "alice" }, ["only-model", "other"]);
+
+    expect((await conductorProvider(alice, { conductorModel: "other" })).model).toBe("only-model");
   });
 
   /* An org project's Conductor should run on the org's connections and its

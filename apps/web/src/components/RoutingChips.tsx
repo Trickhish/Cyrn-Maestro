@@ -23,9 +23,14 @@ interface RoutingChipsProps {
   /* A whole profile rather than one model. Mutually exclusive with
      pinnedModel — picking either clears the other. */
   pinnedModelList?: string;
+  /* Which model the Conductor itself reasons on. Constrained to its own
+     profile's members, so this forces a choice within the profile rather
+     than around it. */
+  conductorModel?: string;
   onPinNode: (nodeId: string | undefined) => void;
   onPinModel: (model: string | undefined) => void;
   onPinModelList: (name: string | undefined) => void;
+  onPickConductorModel: (model: string | undefined) => void;
 }
 
 export function RoutingChips({
@@ -34,13 +39,29 @@ export function RoutingChips({
   pinnedNodeId,
   pinnedModel,
   pinnedModelList,
+  conductorModel,
   onPinNode,
   onPinModel,
   onPinModelList,
+  onPickConductorModel,
 }: RoutingChipsProps) {
   const [plan, setPlan] = useState<Plan>();
   const [lists, setLists] = useState<ModelList[]>([]);
-  const [open, setOpen] = useState<"node" | "model" | null>(null);
+  const [conductorModels, setConductorModels] = useState<string[]>([]);
+  const [open, setOpen] = useState<"node" | "model" | "conductor" | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .conductorModels(projectId)
+      .then((r) => {
+        if (!cancelled) setConductorModels(r.models);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   /* The profiles the owner has set up. Fetched once rather than per keystroke:
      unlike the plan, this does not depend on what was typed. */
@@ -82,6 +103,34 @@ export function RoutingChips({
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-2">
+        {/* Who is coordinating, as opposed to what runs the work. Only shown
+            when there is a profile with something in it — with nothing to
+            choose between, a picker is just a chip that cannot be used. */}
+        {conductorModels.length > 0 && (
+          <Chip
+            label="conductor"
+            value={conductorModel ?? `${conductorModels[0]} · auto`}
+            because={`Chosen from the "manager/conductor" profile, best first. Forcing one picks within that profile.`}
+            pinned={Boolean(conductorModel)}
+            open={open === "conductor"}
+            onToggle={() => setOpen(open === "conductor" ? null : "conductor")}
+            options={[
+              ...(conductorModel
+                ? [{ id: "", label: "Auto", detail: "first available in the profile" }]
+                : []),
+              ...conductorModels.map((m, i) => ({
+                id: m,
+                label: m,
+                detail: i === 0 ? "the profile's first choice" : undefined,
+              })),
+            ]}
+            onPick={(id) => {
+              onPickConductorModel(id || undefined);
+              setOpen(null);
+            }}
+          />
+        )}
+
         <Chip
           label="node"
           value={plan.node?.picked.name ?? "none online"}
