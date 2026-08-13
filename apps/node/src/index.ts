@@ -12,6 +12,19 @@ function flag(name: string): string | undefined {
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
+/* Run by a node that has just downloaded this file, before it trusts it
+   enough to replace itself with it. Loads the config and prints the version,
+   which is enough to catch a truncated download or a bundle that throws on
+   load — the failures that would otherwise leave a machine restarting into
+   nothing. It deliberately does not connect: proving the daemon starts is the
+   job here, not proving the server is up. */
+if (process.argv.includes("--selftest")) {
+  const { loadConfig, nodeIdentity } = await import("./config");
+  const identity = nodeIdentity(loadConfig(flag("config")), []);
+  console.log(identity.version);
+  process.exit(0);
+}
+
 if (process.argv.includes("--help")) {
   console.log(`maestro-node
 

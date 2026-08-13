@@ -3,13 +3,16 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db";
 import { config } from "../config";
+import { NODE_VERSION } from "@maestro/protocol";
 import {
   createEnrollmentToken,
   revokeNode,
   getLiveNode,
   renameLiveNode,
   setLiveConcurrency,
+  upgradeNode,
 } from "../nodes/registry";
+import { daemonDigest } from "./install";
 import { assertCan, nodeScope, projectScope } from "../lib/permissions";
 import { record } from "../lib/audit";
 import { BadRequest, NotFound, requireActor, activeScope, type Env } from "./context";
@@ -28,6 +31,10 @@ nodeRoutes.get("/", async (c) => {
         : eq(schema.nodes.ownerUserId, actor.id),
     );
 
+  /* Undefined when the daemon could not be built, in which case no node is
+     told an update exists — there would be nothing to serve it. */
+  const current = await daemonDigest();
+
   return c.json({
     nodes: rows.map((row) => {
       /* The database says what we last knew; the socket map says what is true
@@ -42,6 +49,9 @@ nodeRoutes.get("/", async (c) => {
         arch: row.arch,
         version: row.version,
         capabilities: row.capabilities,
+        /* Offered only for a connected node, and only when the server has a
+           bundle to give it: an update it cannot download is not an update. */
+        updateAvailable: Boolean(live) && Boolean(current) && row.version !== NODE_VERSION,
         /* What actually applies — the fleet's setting when there is one. */
         maxConcurrentTasks: row.concurrencyOverride ?? row.maxConcurrentTasks,
         /* Kept apart so the interface can say "8 (machine reports 2)" rather
@@ -149,6 +159,37 @@ nodeRoutes.patch("/:id", async (c) => {
   }
 
   return c.json({ ok: true });
+});
+
+/* Replace a node's daemon with the one this server is serving.
+ *
+ * A button rather than a rollout: nothing on a node can recover from a bundle
+ * that will not start, because the only thing that could is the daemon that
+ * would have crashed. Someone watching, who can re-run the install one-liner,
+ * is the recovery path — which is also why this updates one node at a time.
+ * Automatic rollout wants a launcher owning current/previous and a health
+ * stamp before it is safe, and that is deliberately not built yet. */
+nodeRoutes.post("/:id/update", async (c) => {
+  const actor = requireActor(c);
+  const nodeId = c.req.param("id");
+  const scope = await nodeScope(nodeId);
+  if (!scope) throw new NotFound();
+  await assertCan(actor, "node.revoke", scope);
+
+  const digest = await daemonDigest();
+  if (!digest) throw new BadRequest("This server could not build a daemon to send.");
+
+  /* Held open while the node finishes what it is running, so the answer says
+     what actually happened rather than what was requested. */
+  const result = await upgradeNode(nodeId, NODE_VERSION, digest);
+
+  await record(scope.ownerOrgId ?? null, actor, "node.update_requested", nodeId, {
+    version: NODE_VERSION,
+    ok: result.ok,
+    detail: result.detail,
+  });
+
+  return c.json(result, result.ok ? 200 : 409);
 });
 
 nodeRoutes.delete("/:id", async (c) => {

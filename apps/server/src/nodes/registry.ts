@@ -33,6 +33,12 @@ export interface LiveNode {
   reported: Set<string>;
   lastSeenAt: number;
   maxConcurrentTasks: number;
+  /* Set while a node is being updated: it keeps its running tasks but takes
+     no new ones, so it can finish what it has and restart without abandoning
+     work. Checking this server-side rather than letting the node refuse is
+     what closes the race — a task assigned in the gap would either fail
+     outright or hang, since nothing times out a call to a node that left. */
+  draining?: boolean;
 }
 
 /* What a capacity check should use. */
@@ -90,6 +96,61 @@ export function setLiveConcurrency(nodeId: string, maxConcurrentTasks: number): 
   node.socket.send(
     JSON.stringify({ type: "node.configure", id: newId(), maxConcurrentTasks } satisfies ServerMessage),
   );
+}
+
+/* Takes a node out of the rotation, waits for what it is already running to
+   finish, then asks it to replace itself.
+ *
+   Bounded, because `assigned` only empties when a task releases: a release
+   lost to a dropped socket would otherwise leave a node draining forever,
+   taking no work and never updating. Giving up puts it straight back in
+   rotation, which is the safe direction to fail. */
+export async function upgradeNode(
+  nodeId: string,
+  version: string,
+  sha256: string,
+  drainTimeoutMs = 10 * 60_000,
+): Promise<{ ok: boolean; detail: string }> {
+  const node = live.get(nodeId);
+  if (!node) return { ok: false, detail: "That node is not connected." };
+  if (node.draining) return { ok: false, detail: "That node is already updating." };
+
+  node.draining = true;
+  try {
+    const deadline = Date.now() + drainTimeoutMs;
+    while (node.assigned.size > 0) {
+      if (Date.now() > deadline) {
+        return {
+          ok: false,
+          detail: `Still running ${node.assigned.size} task(s) after waiting. Nothing was changed.`,
+        };
+      }
+      if (live.get(nodeId) !== node) return { ok: false, detail: "That node disconnected." };
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+
+    node.socket.send(
+      JSON.stringify({ type: "node.upgrade", id: newId(), version, sha256 } satisfies ServerMessage),
+    );
+    return { ok: true, detail: "Update sent. The node restarts onto it once it has verified it." };
+  } finally {
+    /* Cleared either way. On success the node exits and this entry goes with
+       it; if it declined, or never got that far, it must not be left out of
+       the rotation. */
+    node.draining = false;
+  }
+}
+
+/* Whether a token belongs to a node that is still allowed in — used by the
+   daemon download, which happens over HTTP rather than the socket and so has
+   to check for itself. A revoked node must not be able to fetch code. */
+export async function isActiveNodeToken(token: string): Promise<boolean> {
+  const [row] = await db
+    .select({ status: schema.nodes.status })
+    .from(schema.nodes)
+    .where(eq(schema.nodes.tokenHash, hashToken(token)))
+    .limit(1);
+  return Boolean(row) && row.status !== "revoked";
 }
 
 export function sendToNode(nodeId: string, message: ServerMessage): boolean {
@@ -222,6 +283,16 @@ export async function handleNodeMessage(
             .where(eq(schema.nodes.id, session.nodeId));
           return;
         }
+      }
+
+      /* Logged rather than dropped: a refusal is the only way anyone learns
+         why a node they asked to update is still on the old version, and the
+         request that asked for it has long since returned. */
+      if (message.type === "node.upgrade_result") {
+        const name = node?.name ?? session.nodeId;
+        if (message.ok) console.log(`[node] ${name}: ${message.detail}`);
+        else console.error(`[node] ${name} refused an update: ${message.detail}`);
+        return;
       }
 
       dispatch(message);

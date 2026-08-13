@@ -14,6 +14,7 @@ import { knowledgeRoutes } from "./http/knowledge.routes";
 import { modelListRoutes } from "./http/model-lists.routes";
 import { modelGroupRoutes } from "./http/model-groups.routes";
 import { installScript, daemonBundle } from "./http/install";
+import { isActiveNodeToken } from "./nodes/registry";
 import { errorResponse, withActor, type Env } from "./http/context";
 import { serveStatic } from "./http/static";
 
@@ -47,6 +48,23 @@ app.route("/api/model-groups", modelGroupRoutes);
    of a second value. Served without a session: the token is the credential. */
 app.get("/install/:token", (c) => installScript(c.req.param("token")));
 app.get("/install/:token/daemon.js", () => daemonBundle());
+
+/* The same bundle, for a node that is already enrolled and updating itself.
+ *
+ * Its durable token rather than an enrollment one, since enrollment tokens are
+ * single-use and long spent by then. Worth being clear about what this hands
+ * over: the bundle is the whole daemon, including the approval policy the
+ * machine's owner relies on to gate writes. Updating therefore trusts this
+ * server with the code that enforces that policy, which is a broader trust
+ * than running the tasks it sends. That is why it is a button someone presses
+ * and not something that happens on its own. */
+app.get("/api/node/daemon.js", async (c) => {
+  const token = c.req.header("x-maestro-node-token");
+  if (!token || !(await isActiveNodeToken(token))) {
+    return c.json({ error: "Not a known node." }, 401);
+  }
+  return daemonBundle();
+});
 
 /* An unmatched API path is a 404 in JSON. Only non-API paths fall through to
    the SPA. */

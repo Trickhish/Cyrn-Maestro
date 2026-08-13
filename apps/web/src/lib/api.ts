@@ -109,6 +109,10 @@ export interface NodeSummary {
      interface can explain a number that differs from the box's own config. */
   reportedConcurrency: number;
   concurrencyOverride: number | null;
+  /* What daemon this machine is running, and whether the server has a newer
+     one to give it. */
+  version: string | null;
+  updateAvailable: boolean;
   runningTasks: number;
   lastSeenAt: number | null;
   loadPercent: number | null;
@@ -421,6 +425,10 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ maxConcurrentTasks }),
     }),
+  /* Waits for the node to finish what it is running, so this resolves once the
+     update is actually on its way rather than merely requested. */
+  updateNode: (id: string) =>
+    request<{ ok: boolean; detail: string }>(`/nodes/${id}/update`, { method: "POST" }),
   revokeNode: (id: string) => request<{ ok: true }>(`/nodes/${id}`, { method: "DELETE" }),
 
   providers: () => request<{ providers: Provider[] }>("/providers"),

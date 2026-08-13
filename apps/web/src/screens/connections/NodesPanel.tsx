@@ -89,6 +89,11 @@ export function NodesPanel({
             await api.setNodeConcurrency(node.id, max);
             onChanged();
           }}
+          onUpdate={async () => {
+            const result = await api.updateNode(node.id);
+            onChanged();
+            return result;
+          }}
         />
       ))}
 
@@ -106,12 +111,14 @@ function NodeRow({
   onRevoke,
   onRename,
   onSetConcurrency,
+  onUpdate,
 }: {
   node: NodeSummary;
   busy: boolean;
   onRevoke: () => void;
   onRename: (name: string) => Promise<void>;
   onSetConcurrency: (max: number | null) => Promise<void>;
+  onUpdate: () => Promise<{ ok: boolean; detail: string }>;
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(node.name);
@@ -180,6 +187,7 @@ function NodeRow({
         {node.capabilities.join(" · ")}
       </span>
       <span className="flex-1" />
+      {node.updateAvailable && <Update node={node} onUpdate={onUpdate} />}
       <Concurrency node={node} onSet={onSetConcurrency} />
       <button type="button" className="btn btn-chip" disabled={busy} onClick={onRevoke}>
         Revoke
@@ -278,5 +286,54 @@ function Concurrency({
       {node.runningTasks}/{node.maxConcurrentTasks} tasks
       {node.concurrencyOverride != null && <span className="text-accent-hi"> ·set</span>}
     </button>
+  );
+}
+
+/* Replaces the daemon on a machine with the one this server is serving.
+ *
+ * Deliberately a button and not something that happens on its own: nothing on
+ * a node can recover from a bundle that will not start, because the only thing
+ * that could is the daemon that would have crashed. Someone watching, who can
+ * re-run the install one-liner, is the recovery path. The request stays open
+ * while the node finishes whatever it is running, so it can take a while and
+ * the wait is the honest thing to show. */
+function Update({
+  node,
+  onUpdate,
+}: {
+  node: NodeSummary;
+  onUpdate: () => Promise<{ ok: boolean; detail: string }>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string>();
+
+  return (
+    <span className="flex items-center gap-1.5">
+      {problem && (
+        <span className="text-[11px] text-warn-hi max-w-[280px] truncate" title={problem}>
+          {problem}
+        </span>
+      )}
+      <button
+        type="button"
+        className="btn btn-chip"
+        disabled={busy}
+        title={`Running ${node.version ?? "an unknown version"}. Finishes its current tasks first, then restarts on the new one.`}
+        onClick={async () => {
+          setBusy(true);
+          setProblem(undefined);
+          try {
+            const result = await onUpdate();
+            if (!result.ok) setProblem(result.detail);
+          } catch (err) {
+            setProblem(err instanceof ApiError ? err.message : "Could not update that node.");
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Updating…" : "Update"}
+      </button>
+    </span>
   );
 }

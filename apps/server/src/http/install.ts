@@ -15,7 +15,18 @@ let building: Promise<void> | undefined;
 
 async function build(): Promise<void> {
   const entry = join(import.meta.dir, "../../../node/src/index.ts");
-  const built = await Bun.build({ entrypoints: [entry], target: "bun", minify: false });
+
+  /* Bun.build throws on a resolution failure rather than reporting it, and a
+     server that cannot bundle the daemon should still serve everything else —
+     it just has no update to offer. Swallowing it here is what keeps a build
+     problem from turning the fleet page into a 500. */
+  let built;
+  try {
+    built = await Bun.build({ entrypoints: [entry], target: "bun", minify: false });
+  } catch (err) {
+    console.error("[install] could not bundle the node daemon:", err);
+    return;
+  }
 
   if (!built.success) {
     console.error("[install] failed to bundle the node daemon", built.logs);

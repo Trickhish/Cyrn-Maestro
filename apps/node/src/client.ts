@@ -1,5 +1,6 @@
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, openSync, fsyncSync, closeSync, unlinkSync } from "node:fs";
+import { rename } from "node:fs/promises";
+import { join, dirname } from "node:path";
 import {
   ServerMessage,
   newId,
@@ -228,6 +229,11 @@ export class NodeClient {
         break;
       }
 
+      case "node.upgrade": {
+        await this.upgrade(message.version, message.sha256);
+        break;
+      }
+
       case "node.rejected": {
         /* Version skew is the one rejection that gets better on its own: a
            node ahead of its server, or a server rolled back under a fleet,
@@ -306,6 +312,83 @@ export class NodeClient {
 
       case "ping":
         break;
+    }
+  }
+
+  /* Replace this daemon with the one the server is serving, and exit so the
+     supervisor starts it again on the new code.
+   *
+     Every failure here leaves the running bundle untouched and the node
+     serving. The order matters: verify before swapping, because once the file
+     is replaced the only thing that could undo it is this process, and this
+     process is about to end. */
+  private async upgrade(version: string, sha256: string): Promise<void> {
+    const report = (ok: boolean, detail: string) => {
+      if (!ok) console.error(`Update refused: ${detail}`);
+      this.send({ type: "node.upgrade_result", id: newId(), ok, detail });
+    };
+
+    /* Nothing would bring it back. A foreground install has no supervisor, so
+       exiting would take the machine out of the fleet until someone noticed. */
+    if (!process.env.INVOCATION_ID) {
+      return report(false, "This node is not running under systemd, so it cannot restart itself.");
+    }
+
+    /* The durable token goes in a header on this request; over plain HTTP that
+       is the node's identity in clear on the wire. */
+    const origin = new URL(this.config.serverUrl.replace(/^ws/, "http")).origin;
+    if (new URL(origin).protocol !== "https:" && !isLoopback(origin)) {
+      return report(false, `Refusing to update over ${origin} — it is not encrypted.`);
+    }
+
+    const target = process.argv[1];
+    if (!target) return report(false, "Cannot tell which file this node is running from.");
+
+    try {
+      const res = await fetch(`${origin}/api/node/daemon.js`, {
+        headers: { "x-maestro-node-token": this.config.nodeToken ?? "" },
+      });
+      if (!res.ok) return report(false, `The server would not serve the daemon (${res.status}).`);
+
+      const body = await res.text();
+      const got = new Bun.CryptoHasher("sha256").update(body).digest("hex");
+      if (got !== sha256) {
+        return report(false, "The download did not match the checksum it was promised.");
+      }
+
+      /* Named for the version so two attempts cannot collide, and fsynced
+         before it is trusted so a power loss cannot leave a torn file where a
+         working daemon used to be. */
+      const staged = `${target}.${version}.tmp`;
+      await Bun.write(staged, body);
+      await fsyncPath(staged);
+
+      /* Proves the thing actually starts before it becomes the thing that has
+         to. Catches the realistic failures — a truncated write, a bundle that
+         throws on load — though not one that only fails later. */
+      const check = Bun.spawnSync([process.execPath, staged, "--selftest"], { timeout: 30_000 });
+      if (check.exitCode !== 0) {
+        await safeUnlink(staged);
+        return report(false, "The new daemon failed its self-test, so nothing was replaced.");
+      }
+
+      /* Safe while running: Linux keeps the old inode alive for this process,
+         which is about to exit anyway. */
+      await rename(staged, target);
+      await fsyncPath(dirname(target));
+
+      report(true, `Updated to ${version}. Restarting.`);
+      console.log(`Updated to ${version}; restarting.`);
+
+      /* Give the report a moment to reach the server, then let systemd bring
+         it back. Tasks are already drained — the server stopped assigning
+         before it sent this. */
+      setTimeout(() => {
+        this.stop();
+        process.exit(0);
+      }, 250);
+    } catch (err) {
+      report(false, `Update failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -476,4 +559,31 @@ export function summarise(tool: ToolName, args: unknown): string {
     default:
       return tool;
   }
+}
+
+/* A file only counts as written once the data and the directory entry are on
+   disk. Without this, a machine that loses power mid-update can come back to a
+   truncated daemon and nothing to fall back to. */
+async function fsyncPath(path: string): Promise<void> {
+  const fd = openSync(path, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+async function safeUnlink(path: string): Promise<void> {
+  try {
+    unlinkSync(path);
+  } catch {
+    /* Already gone, or never written. Either way there is nothing to clean. */
+  }
+}
+
+/* Encryption is what protects the durable token on the way to the download,
+   but a node talking to a server on the same machine has no wire to protect. */
+function isLoopback(origin: string): boolean {
+  const { hostname } = new URL(origin);
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
 }

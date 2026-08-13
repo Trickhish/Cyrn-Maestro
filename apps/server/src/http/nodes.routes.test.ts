@@ -1,6 +1,6 @@
 import { expect, test, describe, beforeEach } from "bun:test";
 import { eq } from "drizzle-orm";
-import { newId } from "@maestro/protocol";
+import { newId, NODE_VERSION } from "@maestro/protocol";
 import { app } from "../app";
 import { db, schema } from "../db";
 import { resetDatabase, jsonPost, cookieFrom, body, signedInOwner } from "../test/harness";
@@ -140,6 +140,67 @@ describe("renaming a node", () => {
   });
 
   void ownerId;
+});
+
+/* Updating a node replaces the daemon on someone's machine, so who may ask
+ * and which node it reaches are the parts worth pinning down. The download
+ * route matters as much as the button: it hands over the whole daemon,
+ * including the approval policy the machine's owner relies on. */
+describe("updating a node", () => {
+  const update = (cookie: string, id: string) =>
+    app.request(`/api/nodes/${id}/update`, { method: "POST", headers: { cookie } });
+
+  const listed = async () =>
+    (await body(await app.request("/api/nodes", withCookie(ownerCookie)))).nodes.find(
+      (n: { id: string }) => n.id === nodeId,
+    );
+
+  test("reports the version the machine itself is running", async () => {
+    /* The fixture enrols as 0.1.0, deliberately behind this tree. */
+    expect((await listed()).version).toBe("0.1.0");
+    expect(NODE_VERSION).not.toBe("0.1.0");
+  });
+
+  /* An update that cannot be served is not an update. Bundling is unavailable
+     under the test runner, which makes this the honest case to pin: the
+     versions differ and no update is offered anyway, rather than a button
+     that fails when pressed. */
+  test("offers nothing when the server has no daemon to serve", async () => {
+    expect((await listed()).updateAvailable).toBe(false);
+    const res = await update(ownerCookie, nodeId);
+    expect(res.status).toBe(400);
+  });
+
+  test("a stranger cannot update someone else's node", async () => {
+    await db.insert(schema.users).values({
+      id: "stranger-upd",
+      email: "stranger-upd@x.com",
+      passwordHash: await hashPassword(PASSWORD),
+      instanceRole: "user",
+      status: "active",
+      createdAt: Date.now(),
+    });
+    const strangerCookie = cookieFrom(
+      await app.request("/api/auth/login", jsonPost({ email: "stranger-upd@x.com", password: PASSWORD })),
+    );
+
+    expect((await update(strangerCookie, nodeId)).status).toBe(404);
+  });
+
+  test("a node that does not exist is a 404", async () => {
+    expect((await update(ownerCookie, "no-such-node")).status).toBe(404);
+  });
+
+  /* The bundle is the whole daemon. Handing it to anything that asks would
+     let a revoked machine keep pulling code from a fleet it was thrown out
+     of. */
+  test("the daemon download refuses anyone without a live node token", async () => {
+    expect((await app.request("/api/node/daemon.js")).status).toBe(401);
+    expect(
+      (await app.request("/api/node/daemon.js", { headers: { "x-maestro-node-token": "nope" } }))
+        .status,
+    ).toBe(401);
+  });
 });
 
 /* How many tasks a machine takes at once is its own setting until the fleet

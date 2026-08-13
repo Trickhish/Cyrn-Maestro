@@ -99,7 +99,9 @@ async function chooseNode(
   /* A pin outranks a rule, which outranks the score. */
   const forced = input.pinnedNodeId ?? defaults.nodeId?.value;
   if (forced) {
-    const pinned = online.find((n) => n.nodeId === forced);
+    /* A pin outranks the score, but not a node that is on its way down: work
+       sent there now would be abandoned by the restart. */
+    const pinned = online.find((n) => n.nodeId === forced && !n.draining);
     if (pinned) {
       return {
         picked: describe(pinned),
@@ -112,7 +114,10 @@ async function chooseNode(
        scoring, and say so. */
   }
 
-  const withRoom = online.filter((n) => loadOf(n) < n.maxConcurrentTasks);
+  /* A draining node is finishing what it has before it restarts onto a new
+     bundle. It still shows as online, and its running tasks still run — it
+     just stops being a candidate for new ones. */
+  const withRoom = online.filter((n) => !n.draining && loadOf(n) < n.maxConcurrentTasks);
   if (withRoom.length === 0) return null;
 
   /* A node that recently ran this project has a warm checkout and warm build
