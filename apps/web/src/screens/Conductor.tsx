@@ -170,7 +170,7 @@ export function Conductor({
   );
 
   return (
-    <section className={embedded ? "flex flex-col" : "flex-1 min-w-0 flex flex-col bg-canvas"}>
+    <section className={embedded ? "flex-1 min-h-0 flex flex-col" : "flex-1 min-w-0 flex flex-col bg-canvas"}>
       {!embedded && (
         <header className="h-[46px] flex-none flex items-center gap-3 px-4 md:px-[26px] border-b rule overflow-x-auto scroll-quiet">
           <h1 className="font-display text-[14px] font-semibold whitespace-nowrap">Conductor</h1>
@@ -185,29 +185,20 @@ export function Conductor({
       {/* Embedded, this is the page's one input: it sits at the top where the
           direct composer used to, with the routing chips under it, and the
           conversation reads downward from there. */}
-      {embedded && (
-        <div className="flex flex-col gap-2.5">
-          {composer}
-          {under}
-        </div>
-      )}
-
       <div
         ref={scroller}
-        className={
-          embedded
-            ? "max-h-[420px] overflow-auto scroll-quiet flex flex-col gap-[18px] empty:hidden"
-            : "flex-1 min-h-0 overflow-auto scroll-quiet px-4 md:px-[26px] py-5 flex flex-col gap-[18px]"
-        }
+        className="flex-1 min-h-0 overflow-auto scroll-quiet px-4 md:px-[26px] py-5 flex flex-col gap-[18px]"
       >
-        {messages.length === 0 && !embedded && (
+        {messages.length === 0 && (
           <div className="flex flex-col gap-4 max-w-[760px]">
             <p className="prose-msg">
-              Ask about anything across your projects — what is running, what needs you, what a
-              task changed, where the tokens went.
+              {embedded
+                ? "Describe what you want done and the Conductor picks a model and dispatches it, or ask it about the project and what has run here."
+                : "Ask about anything across your projects — what is running, what needs you, what a task changed, where the tokens went."}
             </p>
 
-            {live.length > 0 && (
+            {/* Embedded, the drawer beside this already lists them. */}
+            {!embedded && live.length > 0 && (
               <div className="flex flex-col gap-1.5">
                 <div className="speaker">running now</div>
                 {live.map((task) => (
@@ -308,9 +299,13 @@ export function Conductor({
         )}
       </div>
 
-      {!embedded && (
-        <footer className="flex-none border-t rule px-4 md:px-[26px] pt-3 pb-3.5">{composer}</footer>
-      )}
+      {/* At the bottom, where the conversation ends and a reply is typed —
+          the routing controls sit under it rather than between the composer
+          and the thread, so they never push the last message out of view. */}
+      <footer className="flex-none border-t rule px-4 md:px-[26px] pt-3 pb-3.5 flex flex-col gap-2.5">
+        {composer}
+        {under}
+      </footer>
     </section>
   );
 }
