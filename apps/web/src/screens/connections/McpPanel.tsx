@@ -139,6 +139,7 @@ function ServerRow({ server, onChanged }: { server: McpServer; onChanged: () => 
         <span className="font-mono text-[10.5px] text-faint truncate max-w-[260px]">
           {server.url ?? `${server.command} ${(server.args ?? []).join(" ")}`}
         </span>
+        <DescriptionField server={server} onChanged={onChanged} />
         <span className="flex-1" />
 
         <label className="flex items-center gap-1.5">
@@ -231,6 +232,70 @@ function ServerRow({ server, onChanged }: { server: McpServer; onChanged: () => 
         </div>
       )}
     </div>
+  );
+}
+
+/* What a model chooses this server by, editable in place — the same
+   click-to-edit idiom a node's name uses. Blank reads as "(no description)"
+   in the row and simply sends nothing extra to the model's prompt, rather
+   than an empty line. */
+function DescriptionField({
+  server,
+  onChanged,
+}: {
+  server: McpServer;
+  onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(server.description ?? "");
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    const next = value.trim();
+    if (next === (server.description ?? "")) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.updateMcpServer(server.id, { description: next });
+      onChanged();
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={value}
+        disabled={saving}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Escape") {
+            setValue(server.description ?? "");
+            setEditing(false);
+          }
+        }}
+        placeholder="What it's for"
+        className="text-[12px] text-primary bg-canvas border rule-default rounded px-1.5 py-0.5 outline-none focus:border-[var(--border-accent)] w-[220px]"
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="text-[12px] text-tertiary hover:text-primary hover:underline decoration-dotted underline-offset-2 truncate max-w-[220px] text-left"
+      onClick={() => setEditing(true)}
+      title="Click to edit — shown to the model instead of this server's tool list."
+    >
+      {server.description || "(no description)"}
+    </button>
   );
 }
 
@@ -442,6 +507,7 @@ function ImportGateway({ onImported }: { onImported: (close: boolean) => void })
 function AddServer({ onAdded }: { onAdded: () => void }) {
   const [form, setForm] = useState({
     name: "",
+    description: "",
     placement: "server" as "server" | "node",
     url: "",
     command: "",
@@ -460,6 +526,7 @@ function AddServer({ onAdded }: { onAdded: () => void }) {
     try {
       await api.addMcpServer({
         name: form.name,
+        description: form.description || undefined,
         placement: form.placement,
         approval: form.approval,
         ...(form.placement === "server"
@@ -492,6 +559,17 @@ function AddServer({ onAdded }: { onAdded: () => void }) {
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             placeholder="github"
             required
+          />
+        </Field>
+        {/* What a model chooses this server by: it is shown one line per
+            server rather than every tool on it, so this is the whole pitch —
+            "IP, websites and domains" is what makes it open web_tools. */}
+        <Field label="What it's for" hint="Shown to the model instead of its tool list, until it asks to see one.">
+          <input
+            className={inputClass}
+            value={form.description}
+            onChange={(e) => setForm({ ...form, description: e.target.value })}
+            placeholder="IP, websites and domains"
           />
         </Field>
         <Field label="Where it runs">

@@ -10,7 +10,15 @@ import { config } from "../config";
 import { append, conversationFrom } from "./events";
 import { resolveProvider, estimateCost, NoProviderError } from "../providers/gateway";
 import { streamWithFailover } from "./failover";
-import { resolveMcpTools, runMcpTool, isMcpTool } from "../mcp/registry";
+import {
+  resolveMcpTools,
+  runMcpTool,
+  isMcpTool,
+  mcpPromptSection,
+  describeServerTools,
+  LIST_MCP_TOOLS_TOOL,
+  type ResolvedMcp,
+} from "../mcp/registry";
 import { collectSkills, fetchSkillBody, skillsPromptSection, recordSkillProblems, LOAD_SKILL_TOOL, type SkillSummary } from "./skills";
 import { KNOWLEDGE_TOOLS, isKnowledgeTool, runKnowledgeTool, knowledgePromptSection } from "./knowledge-tools";
 import { getKnowledge } from "../projects/knowledge";
@@ -204,11 +212,19 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
     project.instructions,
     knowledgePromptSection(knowledge, task.nodeId),
     skillsPromptSection(skills),
+    mcpPromptSection(mcp),
   ]
     .filter(Boolean)
     .join("\n\n");
   let toolCallCount = 0;
   const startedAt = Date.now();
+
+  /* Servers the model has asked to see, this task. A server's real tool
+     schemas join extraTools only after list_mcp_tools names it — the same
+     shape load_skill uses for a skill's body, but for tool availability
+     rather than instruction text. Ninety unopened schemas cost nothing; the
+     ones actually in play cost what they always did. */
+  const openedServers = new Set<string>();
 
   try {
     for (let turn = 0; turn < 100; turn++) {
@@ -257,7 +273,14 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
             extraTools: [
               ...(skills.length > 0 ? [LOAD_SKILL_TOOL as never] : []),
               ...(KNOWLEDGE_TOOLS as never[]),
-              ...mcp.definitions,
+              ...(mcp.servers.length > 0 ? [LIST_MCP_TOOLS_TOOL as never] : []),
+              /* Only the servers the model has opened this task — see
+                 openedServers above. */
+              ...mcp.definitions.filter((d) =>
+                mcp.tools.some(
+                  (t) => t.qualifiedName === d.name && openedServers.has(t.serverName),
+                ),
+              ),
             ],
             pinned: task.modelPinned,
           },
@@ -360,6 +383,8 @@ async function runLoop(taskId: string, state: RunState): Promise<void> {
 
         if (call.name === LOAD_SKILL_TOOL.name) {
           await loadSkillCall(taskId, task.nodeId!, call, skills);
+        } else if (call.name === LIST_MCP_TOOLS_TOOL.name) {
+          await listMcpToolsCall(taskId, call, mcp, openedServers);
         } else if (isKnowledgeTool(call.name)) {
           await runKnowledgeTool(taskId, project.id, task.nodeId!, call);
         } else if (mcpName) {
@@ -439,6 +464,39 @@ async function loadSkillCall(
       body ??
       `The skill "${name}" could not be read from the workspace. Continue without it.`,
   });
+}
+
+/* Answered from what resolveMcpTools already fetched — no new connection, no
+   approval, since this only describes tools rather than running one. Opening
+   a server is remembered for the rest of the task: the next turn's extraTools
+   includes its real definitions, the same way a loaded skill's body stays
+   available without asking again. */
+export async function listMcpToolsCall(
+  taskId: string,
+  call: { id: string; name: string; argumentsJson: string },
+  mcp: ResolvedMcp,
+  openedServers: Set<string>,
+): Promise<void> {
+  let server = "";
+  try {
+    server = String((JSON.parse(call.argumentsJson || "{}") as { server?: unknown }).server ?? "");
+  } catch {
+    /* Handled below as an unknown server. */
+  }
+
+  append(taskId, {
+    kind: "tool_call",
+    callId: call.id,
+    tool: LIST_MCP_TOOLS_TOOL.name,
+    args: { server },
+    summary: `mcp ${server}`,
+  });
+
+  const output = describeServerTools(mcp, server);
+  const known = mcp.servers.some((s) => s.name === server);
+  if (known) openedServers.add(server);
+
+  append(taskId, { kind: "tool_result", callId: call.id, ok: known, output });
 }
 
 /* An MCP tool call. It runs on the server rather than the node, but it goes

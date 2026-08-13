@@ -134,6 +134,13 @@
       "when": 1786740000000,
       "tag": "0018_conductor_message_tools",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1786750000000,
+      "tag": "0019_mcp_description",
+      "breakpoints": true
     }
   ]
 }

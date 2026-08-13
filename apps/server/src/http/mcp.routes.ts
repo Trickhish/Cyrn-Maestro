@@ -32,6 +32,10 @@ const serverName = z
 
 const ServerInput = z.object({
   name: serverName,
+  /* What a model chooses a server by, since it is shown the server rather
+     than every tool on it — "IP, websites and domains" is what tells it
+     web_tools is the one to open. */
+  description: z.string().trim().max(200).optional(),
   placement: z.enum(["server", "node"]).default("server"),
   url: z.url().optional(),
   headers: z.record(z.string(), z.string()).optional(),
@@ -49,6 +53,7 @@ function publicView(row: typeof schema.mcpServers.$inferSelect) {
   return {
     id: row.id,
     name: row.name,
+    description: row.description,
     placement: row.placement,
     transport: row.transport,
     url: row.url,
@@ -102,6 +107,7 @@ mcpRoutes.post("/", async (c) => {
     ownerUserId: scope.ownerOrgId ? null : actor.id,
     ownerOrgId: scope.ownerOrgId,
     name: parsed.data.name,
+    description: parsed.data.description ?? null,
     placement,
     transport: (placement === "server" ? "http" : "stdio") as "http" | "stdio",
     url: parsed.data.url ?? null,
@@ -318,6 +324,7 @@ mcpRoutes.patch("/:id", async (c) => {
     .update(schema.mcpServers)
     .set({
       ...(parsed.data.url !== undefined ? { url: parsed.data.url } : {}),
+      ...(parsed.data.description !== undefined ? { description: parsed.data.description || null } : {}),
       ...(parsed.data.enabled !== undefined ? { enabled: parsed.data.enabled } : {}),
       ...(parsed.data.approval !== undefined ? { approval: parsed.data.approval } : {}),
       ...(parsed.data.toolAllowlist !== undefined

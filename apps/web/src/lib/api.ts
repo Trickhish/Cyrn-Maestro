@@ -225,6 +225,7 @@ export interface OrganizationDetail extends Organization {
 export interface McpServer {
   id: string;
   name: string;
+  description: string | null;
   placement: "server" | "node";
   transport: "http" | "stdio";
   url: string | null;

@@ -173,3 +173,75 @@ describe("resolving an owner's tools", () => {
     expect(row.lastError).toBeTruthy();
   }, 20_000);
 });
+
+/* Servers are what a model chooses between now, not tools — nine servers and
+ * a name each cost less than a hundred JSON schemas, and match what "give me
+ * the web_tools MCP" actually reads as. */
+describe("the server catalogue offered to a model", () => {
+  test("a server that never connected contributes nothing to it either", async () => {
+    await addServer({ url: "http://127.0.0.1:9/" });
+    const resolved = await resolveMcpTools(OWNER);
+    expect(resolved.servers).toHaveLength(0);
+  }, 20_000);
+
+  test("a never-approval server is not offered", async () => {
+    await addServer({ approval: "never" });
+    expect((await resolveMcpTools(OWNER)).servers).toHaveLength(0);
+  });
+
+  test("a node-placed server is not offered — it has nothing running yet", async () => {
+    await addServer({ placement: "node", transport: "stdio", command: "npx", url: null });
+    expect((await resolveMcpTools(OWNER)).servers).toHaveLength(0);
+  });
+});
+
+describe("describing what a server offers", () => {
+  const fake = (servers: Array<{ name: string; description: string | null; toolCount: number }>, tools: Array<{ qualifiedName: string; serverName: string; description: string; inputSchema: unknown }>) =>
+    ({ tools, definitions: [], needsApproval: new Set<string>(), problems: [], servers } as never);
+
+  test("lists a known server's tools by their real, callable name", async () => {
+    const { describeServerTools } = await import("./registry");
+    const mcp = fake(
+      [{ name: "web_tools", description: "IP, websites and domains", toolCount: 1 }],
+      [{
+        qualifiedName: "web_tools__dns_lookup",
+        serverName: "web_tools",
+        description: "Resolve a hostname",
+        inputSchema: { properties: { hostname: {} } },
+      }],
+    );
+    const out = describeServerTools(mcp, "web_tools");
+    expect(out).toContain("web_tools__dns_lookup(hostname)");
+    expect(out).toContain("Resolve a hostname");
+  });
+
+  test("an unknown server names what does exist instead of failing silently", async () => {
+    const { describeServerTools } = await import("./registry");
+    const mcp = fake([{ name: "web_tools", description: null, toolCount: 1 }], []);
+    expect(describeServerTools(mcp, "wrong_name")).toContain("web_tools");
+  });
+
+  test("a real server with no tools right now says so plainly", async () => {
+    const { describeServerTools } = await import("./registry");
+    const mcp = fake([{ name: "web_tools", description: null, toolCount: 0 }], []);
+    expect(describeServerTools(mcp, "web_tools")).toContain("no tools available");
+  });
+});
+
+describe("the prompt line for a set of servers", () => {
+  test("is empty when nothing is connected", async () => {
+    const { mcpPromptSection } = await import("./registry");
+    expect(mcpPromptSection({ tools: [], definitions: [], needsApproval: new Set(), problems: [], servers: [] } as never)).toBe("");
+  });
+
+  test("names each server and what it is for", async () => {
+    const { mcpPromptSection } = await import("./registry");
+    const out = mcpPromptSection({
+      tools: [], definitions: [], needsApproval: new Set(), problems: [],
+      servers: [{ name: "web_tools", description: "IP, websites and domains", toolCount: 18 }],
+    } as never);
+    expect(out).toContain("web_tools");
+    expect(out).toContain("IP, websites and domains");
+    expect(out).toContain("list_mcp_tools");
+  });
+});

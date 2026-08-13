@@ -607,6 +607,11 @@ export const mcpServers = sqliteTable(
     ownerUserId: text("owner_user_id").references(() => users.id, { onDelete: "cascade" }),
     ownerOrgId: text("owner_org_id").references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
+    /* What this server is for, in one line — "IP, websites and domains".
+       Models are shown servers rather than every tool on them, so this is
+       what they choose by: with nine servers and a hundred tools, a name
+       alone is not enough to pick from. */
+    description: text("description"),
     placement: text("placement", { enum: ["server", "node"] }).notNull(),
     transport: text("transport", { enum: ["http", "stdio"] }).notNull(),
 

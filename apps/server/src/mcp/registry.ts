@@ -13,6 +13,10 @@ import type { ToolDefinition } from "../providers/types";
 export interface ResolvedMcp {
   tools: McpTool[];
   definitions: ToolDefinition[];
+  /* One line per connected server, for the prompt. Nine of these cost less
+     than a hundred JSON schemas and let the model choose by what a server is
+     for rather than by scanning tool names. */
+  servers: Array<{ name: string; description: string | null; toolCount: number }>;
   /* Which tools need a human before they run, by qualified name. */
   needsApproval: Set<string>;
   /* Reported rather than swallowed: a configured server that will not connect
@@ -23,6 +27,7 @@ export interface ResolvedMcp {
 const EMPTY: ResolvedMcp = {
   tools: [],
   definitions: [],
+  servers: [],
   needsApproval: new Set(),
   problems: [],
 };
@@ -113,7 +118,72 @@ export async function resolveMcpTools(owner: McpOwner): Promise<ResolvedMcp> {
     definitions: tools.map(toolDefinitionFor),
     needsApproval,
     problems,
+    /* Only servers that actually contributed a tool: a "never" approval or a
+       node-placement row was already skipped above and has nothing to offer. */
+    servers: rows
+      .map((row) => ({
+        name: row.name,
+        description: row.description,
+        toolCount: tools.filter((t) => t.serverName === row.name).length,
+      }))
+      .filter((s) => s.toolCount > 0),
   };
+}
+
+/* Offered instead of every server's tools, the way a skill's one-line summary
+ * is offered instead of its full body. Nine servers cost nine lines; their
+ * hundred-odd combined tool schemas cost every call, whether or not the task
+ * has anything to do with DNS. */
+export function mcpPromptSection(mcp: ResolvedMcp): string {
+  if (mcp.servers.length === 0) return "";
+
+  const lines = mcp.servers.map(
+    (s) => `- ${s.name} (${s.toolCount} tool${s.toolCount === 1 ? "" : "s"})${s.description ? ` — ${s.description}` : ""}`,
+  );
+
+  return [
+    "MCP servers available. Call list_mcp_tools with a server's name to see what it offers before using it:",
+    ...lines,
+  ].join("\n");
+}
+
+/* Offered whenever any server is connected — the one tool that makes the rest
+ * discoverable. Modelled on load_skill: a name in, the real tool list back as
+ * text, and the model calls them by their normal qualified name afterward. */
+export const LIST_MCP_TOOLS_TOOL = {
+  name: "list_mcp_tools",
+  description:
+    "See the tools one MCP server offers, with their arguments, before calling any of them.",
+  parameters: {
+    type: "object",
+    properties: {
+      server: { type: "string", description: "The server's name, exactly as listed." },
+    },
+    required: ["server"],
+    additionalProperties: false,
+  },
+} as const;
+
+/* What list_mcp_tools hands back: one line per tool on that server, its real
+ * (namespaced) name included so the model calls it correctly afterward — the
+ * whole reason the earlier mismatch happened was a name it had to remember
+ * rather than one just handed to it. */
+export function describeServerTools(mcp: ResolvedMcp, serverName: string): string {
+  const known = mcp.tools.filter((t) => t.serverName === serverName);
+  if (known.length === 0) {
+    const names = mcp.servers.map((s) => s.name);
+    return names.includes(serverName)
+      ? `${serverName} has no tools available right now.`
+      : `No server called "${serverName}". Available: ${names.join(", ") || "none"}.`;
+  }
+
+  return known
+    .map((t) => {
+      const props = (t.inputSchema as { properties?: Record<string, unknown> })?.properties ?? {};
+      const args = Object.keys(props).join(", ");
+      return `${t.qualifiedName}(${args})${t.description ? ` — ${t.description}` : ""}`;
+    })
+    .join("\n");
 }
 
 /* Runs one MCP tool call, resolving which server owns it from the namespace. */
