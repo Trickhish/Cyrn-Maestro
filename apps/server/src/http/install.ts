@@ -1,33 +1,65 @@
 import { join } from "node:path";
+import { NODE_VERSION } from "@maestro/protocol";
 import { config } from "../config";
 
-/* The daemon is bundled on first request and cached in memory. Bundling keeps
-   the install to two fetches and means the node has no dependency to resolve
-   on the target machine beyond Bun itself. */
+/* The daemon is bundled once and cached in memory. Bundling keeps the install
+   to two fetches and means the node has no dependency to resolve on the target
+   machine beyond Bun itself.
+ *
+   Built once, eagerly, rather than lazily on first request: two requests
+   arriving together would otherwise each start a build, and a node deciding
+   whether to update needs the answer to be the same every time it asks. */
 let bundled: string | undefined;
+let digest: string | undefined;
+let building: Promise<void> | undefined;
+
+async function build(): Promise<void> {
+  const entry = join(import.meta.dir, "../../../node/src/index.ts");
+  const built = await Bun.build({ entrypoints: [entry], target: "bun", minify: false });
+
+  if (!built.success) {
+    console.error("[install] failed to bundle the node daemon", built.logs);
+    return;
+  }
+
+  bundled = await built.outputs[0].text();
+  /* Integrity only — the version is what identifies a build. A node checks
+     this to know its download arrived intact, not to decide whether to
+     update. */
+  digest = new Bun.CryptoHasher("sha256").update(bundled).digest("hex");
+}
+
+export function buildDaemonBundle(): Promise<void> {
+  building ??= build();
+  return building;
+}
+
+/* What the server would hand a node right now. Undefined when the build
+   failed, which is a reason to offer no update at all rather than to advertise
+   something that cannot be served. */
+export async function daemonDigest(): Promise<string | undefined> {
+  await buildDaemonBundle();
+  return digest;
+}
 
 export async function daemonBundle(): Promise<Response> {
+  await buildDaemonBundle();
+
   if (!bundled) {
-    const entry = join(import.meta.dir, "../../../node/src/index.ts");
-    const built = await Bun.build({
-      entrypoints: [entry],
-      target: "bun",
-      minify: false,
+    return new Response("// Could not build the node daemon. Check the server logs.\n", {
+      status: 500,
+      headers: { "content-type": "text/javascript" },
     });
-
-    if (!built.success) {
-      console.error("[install] failed to bundle the node daemon", built.logs);
-      return new Response("// Could not build the node daemon. Check the server logs.\n", {
-        status: 500,
-        headers: { "content-type": "text/javascript" },
-      });
-    }
-
-    bundled = await built.outputs[0].text();
   }
 
   return new Response(bundled, {
-    headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" },
+    headers: {
+      "content-type": "text/javascript; charset=utf-8",
+      "cache-control": "no-store",
+      /* So a node can check what it got matches what it was promised. */
+      "x-maestro-node-version": NODE_VERSION,
+      ...(digest ? { "x-maestro-node-sha256": digest } : {}),
+    },
   });
 }
 

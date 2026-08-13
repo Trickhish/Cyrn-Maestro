@@ -139,10 +139,24 @@ export const TaskDone = z.object({
   detail: z.string().optional(),
 });
 
+/* How an update went, so the fleet page can say something other than silence.
+ *
+ * "started" means the node has the new bundle down, verified, and swapped in,
+ * and is about to exit for its supervisor to restart it — the next thing the
+ * server hears from that node is a fresh register on the new version. Anything
+ * else means nothing changed and the node is still running. */
+export const NodeUpgradeResult = z.object({
+  type: z.literal("node.upgrade_result"),
+  id: z.string(),
+  ok: z.boolean(),
+  detail: z.string(),
+});
+
 export const NodeMessage = z.discriminatedUnion("type", [
   NodeEnroll,
   NodeRegister,
   NodeHeartbeat,
+  NodeUpgradeResult,
   TaskAccepted,
   TaskRejected,
   ToolResult,
@@ -172,6 +186,21 @@ export const NodeRegistered = z.object({
   /* Set when the fleet has been given a concurrency for this machine that
      differs from the one it reported. Absent means "your own config stands". */
   maxConcurrentTasks: z.number().int().min(1).optional(),
+});
+
+/* Asks a node to replace its own bundle and restart onto it.
+ *
+ * Sent only when someone presses Update on the fleet page — there is no
+ * automatic rollout, and deliberately so: nothing on a node can roll back a
+ * bad bundle, since the only thing that could is the daemon that would have
+ * crashed. A human pressing the button is the recovery path. */
+export const NodeUpgrade = z.object({
+  type: z.literal("node.upgrade"),
+  id: z.string(),
+  version: z.string(),
+  /* Checked against what actually arrives, so a truncated download is caught
+     before it is trusted. */
+  sha256: z.string(),
 });
 
 /* Settings pushed to a node while it is connected.
@@ -264,6 +293,7 @@ export const ServerMessage = z.discriminatedUnion("type", [
   NodeRegistered,
   NodeRejected,
   NodeConfigure,
+  NodeUpgrade,
   WorkspaceProvision,
   TaskAssign,
   ToolCall,

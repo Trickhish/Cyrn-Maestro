@@ -155,6 +155,17 @@ export async function handleNodeMessage(
 ): Promise<void> {
   const parsed = NodeMessage.safeParse(safeJson(raw));
   if (!parsed.success) {
+    /* An identified node sending something this server does not know is a
+       version skew, not an impostor — a node updated ahead of the server, or a
+       server rolled back under a fleet. Rejecting it would be read as fatal
+       and crash-loop a machine that is otherwise working perfectly, so the
+       frame is dropped and the socket left alone. Only an unidentified socket
+       still gets told, since there the frame is all we have to go on. */
+    if (session.nodeId) {
+      console.error(`[node] ignoring a frame from ${session.nodeId} that this server cannot parse.`);
+      return;
+    }
+
     socket.send(
       JSON.stringify({
         type: "node.rejected",

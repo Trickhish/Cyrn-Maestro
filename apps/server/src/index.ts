@@ -1,5 +1,7 @@
+import { NODE_VERSION } from "@maestro/protocol";
 import { app } from "./app";
 import { config } from "./config";
+import { buildDaemonBundle, daemonDigest } from "./http/install";
 import { handleNodeMessage, handleDisconnect, type SocketSession } from "./nodes/registry";
 
 import { recoverOrphanedTasks } from "./tasks/recovery";
@@ -75,3 +77,11 @@ console.log(`maestro server → http://${server.hostname}:${server.port}`);
 console.log(`node socket     ws://${server.hostname}:${server.port}${NODE_SOCKET_PATH}`);
 console.log(`database        ${config.dbPath}`);
 console.log(`serving         ${config.webDist}`);
+
+/* Built now rather than on the first install or update request: it takes a
+   moment, and a node asking whether it is out of date should not be the thing
+   that waits for it. */
+void buildDaemonBundle().then(async () => {
+  const digest = await daemonDigest();
+  console.log(`node daemon     ${NODE_VERSION}${digest ? ` (${digest.slice(0, 12)})` : " — build failed"}`);
+});

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { hostname, platform, arch } from "node:os";
+import { NODE_VERSION } from "@maestro/protocol";
 
 /* Node configuration.
  *
@@ -102,7 +103,7 @@ export function nodeIdentity(config: NodeConfig, workspaces: Array<{ projectId: 
     name: config.name,
     os: platform(),
     arch: arch(),
-    version: "0.1.0",
+    version: NODE_VERSION,
     maxConcurrentTasks: config.maxConcurrentTasks,
     capabilities: detectCapabilities(),
     workspaces: workspaces.map((w) => ({ projectId: w.projectId, path: w.path, vcs: "none" as const })),

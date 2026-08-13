@@ -229,6 +229,19 @@ export class NodeClient {
       }
 
       case "node.rejected": {
+        /* Version skew is the one rejection that gets better on its own: a
+           node ahead of its server, or a server rolled back under a fleet,
+           both resolve when the other side catches up. Treating it as fatal
+           would crash-loop a machine over a frame, so it reconnects with
+           backoff like any other blip. */
+        if (message.reason === "version_mismatch") {
+          console.error(
+            `The server could not understand a frame (${message.detail ?? "version mismatch"}). Reconnecting.`,
+          );
+          this.socket?.close();
+          return;
+        }
+
         /* A stale install command run on a machine that is already enrolled and
            working should not take it down. Falling back to the stored identity
            keeps it serving; only a machine with no other way in gives up. */
