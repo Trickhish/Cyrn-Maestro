@@ -62,6 +62,10 @@ export function Conductor({
   const [busy, setBusy] = useState(false);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
+  /* Dispatched task ids already followed up on, so the automatic follow-up
+     fires once each. Declared here because history loading seeds it — see the
+     effect below and the watcher further down. */
+  const reported = useRef(new Set<string>());
 
   /* The thread is the server's, so a reload continues it. Loaded once per
      project rather than polled: it only changes when this page changes it. */
@@ -80,6 +84,12 @@ export function Conductor({
               ...(m.dispatched?.length ? { dispatched: m.dispatched } : {}),
             })),
           );
+          /* Anything dispatched in loaded history was already followed up on
+             (its answer is in that history) or finished before this page
+             existed. Either way it must not trigger a fresh follow-up — that
+             is what made the Conductor re-answer the last task on every
+             reload. */
+          for (const m of r.messages) for (const id of m.dispatched ?? []) reported.current.add(id);
         }
       })
       .catch(() => {});
@@ -156,8 +166,8 @@ export function Conductor({
    * panel watches instead, and asks it one more question the moment a task it
    * started reaches a terminal state. Reported ids are remembered in a ref
    * rather than state: the task list is re-polled every four seconds, and
-   * anything less durable would ask again on every tick. */
-  const reported = useRef(new Set<string>());
+   * anything less durable would ask again on every tick. `reported` is
+   * declared with the other refs above, since history loading seeds it. */
   const askRef = useRef(ask);
   askRef.current = ask;
 
