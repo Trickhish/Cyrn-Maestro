@@ -446,6 +446,12 @@ export const api = {
     ),
   /* Turns a whole upstream on or off — every model that provider serves on
      this connection, in one call. */
+  /* Probes only that upstream's models. Records verdicts and nothing else —
+     it never adds or removes a model the way a refresh does. */
+  testOwner: (providerId: string, ownedBy: string) =>
+    post<{ tested: number; usable: number }>(
+      `/providers/${providerId}/owners/${encodeURIComponent(ownedBy)}/test`,
+    ),
   setOwnerEnabled: (providerId: string, ownedBy: string, enabled: boolean) =>
     request<{ ok: true; models: number }>(
       `/providers/${providerId}/owners/${encodeURIComponent(ownedBy)}`,

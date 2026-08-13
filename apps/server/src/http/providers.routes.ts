@@ -506,6 +506,67 @@ providerRoutes.patch("/:id/owners/:ownedBy", async (c) => {
   return c.json({ ok: true, models: changed.length });
 });
 
+/* Probe just one upstream's models.
+ *
+ * A refresh caps probing across the whole connection, so on a large gateway
+ * most models never get checked — and the ones you actually care about are
+ * usually the ones from the upstream you suspect. This is that question asked
+ * narrowly: thirty calls to find out whether antigravity is back, rather than
+ * three hundred to find out about everything.
+ *
+ * Not a refresh: it re-reads nothing and reconciles nothing, so testing an
+ * upstream can never add or remove a model. It only records verdicts. */
+providerRoutes.post("/:id/owners/:ownedBy/test", async (c) => {
+  const actor = requireActor(c);
+  const providerId = c.req.param("id");
+  const ownedBy = decodeURIComponent(c.req.param("ownedBy"));
+
+  const scope = await providerScope(providerId);
+  if (!scope) throw new NotFound();
+  await assertCan(actor, "provider.manage", scope);
+
+  const [row] = await db
+    .select()
+    .from(schema.providerConnections)
+    .where(eq(schema.providerConnections.id, providerId))
+    .limit(1);
+  if (!row) throw new NotFound();
+
+  const models = await db
+    .select({ modelId: schema.models.modelId })
+    .from(schema.models)
+    .where(and(eq(schema.models.providerId, providerId), eq(schema.models.ownedBy, ownedBy)));
+
+  if (models.length === 0) return c.json({ tested: 0, usable: 0 });
+
+  const adapter = adapterFor(row);
+  const results = await mapWithConcurrency(models, 6, async (model) => ({
+    modelId: model.modelId,
+    result: await adapter.probe(model.modelId),
+  }));
+
+  for (const { modelId, result } of results) {
+    await db
+      .update(schema.models)
+      .set({
+        probedAt: Date.now(),
+        probeOk: result.ok,
+        probeError: result.error ?? null,
+        needsReasoningEffort: result.needsReasoningEffort ?? false,
+      })
+      .where(and(eq(schema.models.providerId, providerId), eq(schema.models.modelId, modelId)));
+  }
+
+  const usable = results.filter((r) => r.result.ok).length;
+  await record(scope.ownerOrgId ?? null, actor, "provider.owner_tested", providerId, {
+    ownedBy,
+    tested: results.length,
+    usable,
+  });
+
+  return c.json({ tested: results.length, usable });
+});
+
 /* Puts every model on this connection back to its automatic classification. */
 providerRoutes.post("/:id/models/reclassify", async (c) => {
   const actor = requireActor(c);

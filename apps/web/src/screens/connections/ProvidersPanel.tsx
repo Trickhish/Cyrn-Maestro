@@ -507,6 +507,8 @@ function OwnerDrawer({
      you open the one you care about, not that you scroll past all of them. */
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [tested, setTested] = useState<string>();
 
   const enabled = models.filter((m) => m.enabled).length;
   const broken = models.filter((m) => m.probeOk === false).length;
@@ -534,10 +536,45 @@ function OwnerDrawer({
           )}
         </button>
 
+        {/* Narrow on purpose: thirty calls to find out whether one upstream is
+            back, rather than three hundred to find out about everything. */}
         <button
           type="button"
           className="btn btn-chip"
-          disabled={busy}
+          disabled={busy || testing}
+          title={`Probe all ${models.length} models from ${owner} — one API call each.`}
+          onClick={async () => {
+            setTesting(true);
+            setTested(undefined);
+            try {
+              const r = await api.testOwner(providerId, owner);
+              setTested(`${r.usable}/${r.tested} usable`);
+              onChanged();
+            } catch (err) {
+              setTested(err instanceof ApiError ? err.message : "Testing failed");
+            } finally {
+              setTesting(false);
+            }
+          }}
+        >
+          {testing ? `Testing ${models.length}…` : "Test"}
+        </button>
+
+        {tested && (
+          <button
+            type="button"
+            className="font-mono text-[10.5px] text-tertiary hover:text-primary"
+            title="Click to dismiss"
+            onClick={() => setTested(undefined)}
+          >
+            {tested}
+          </button>
+        )}
+
+        <button
+          type="button"
+          className="btn btn-chip"
+          disabled={busy || testing}
           title={
             allOff
               ? `Re-enable all ${models.length} models from ${owner}.`

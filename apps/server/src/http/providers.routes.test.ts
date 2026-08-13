@@ -492,3 +492,101 @@ describe("enabling and disabling a whole upstream", () => {
     expect((await body(res)).models).toBe(0);
   });
 });
+
+/* Testing one upstream is the narrow version of the question a refresh asks
+ * broadly: thirty calls to find out whether antigravity is back, rather than
+ * three hundred to find out about everything. It records verdicts and nothing
+ * else — testing must never change which models exist. */
+describe("testing one upstream's models", () => {
+  const realFetch = globalThis.fetch;
+
+  /* Every probe is a chat completion; this makes one model fail and the rest
+     succeed, so the counts mean something. */
+  function probesFailingFor(deadModelIds: string[]) {
+    globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const sent = String((init?.body as string) ?? "");
+      if (deadModelIds.some((id) => sent.includes(`"${id}"`))) {
+        return new Response(JSON.stringify({ error: { message: "no credentials" } }), { status: 404 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), {
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+  }
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  async function seedOwned(rows: Array<{ id: string; ownedBy: string }>) {
+    for (const row of rows) {
+      await db.insert(schema.models).values({
+        id: crypto.randomUUID(), providerId, modelId: row.id, ownedBy: row.ownedBy,
+        tier: "standard", tierSource: "inferred", contextWindow: null,
+        priceInPerMTok: null, priceOutPerMTok: null, enabled: true, needsReasoningEffort: false,
+      });
+    }
+  }
+
+  const test1 = (c: string, ownedBy: string) =>
+    app.request(`/api/providers/${providerId}/owners/${encodeURIComponent(ownedBy)}/test`, {
+      method: "POST",
+      headers: { cookie: c },
+    });
+
+  test("probes only that upstream, and reports how many work", async () => {
+    await seedOwned([
+      { id: "ag-1", ownedBy: "antigravity" },
+      { id: "ag-2", ownedBy: "antigravity" },
+      { id: "gq-1", ownedBy: "groq" },
+    ]);
+    probesFailingFor(["ag-2"]);
+
+    const res = await test1(cookie, "antigravity");
+    expect(await body<{ tested: number; usable: number }>(res)).toEqual({ tested: 2, usable: 1 });
+
+    /* The other upstream was not touched, so it keeps its unknown verdict. */
+    const [groq] = await db.select().from(schema.models).where(eq(schema.models.modelId, "gq-1"));
+    expect(groq.probeOk).toBeNull();
+  });
+
+  test("records the verdict against each model", async () => {
+    await seedOwned([{ id: "ag-1", ownedBy: "antigravity" }, { id: "ag-2", ownedBy: "antigravity" }]);
+    probesFailingFor(["ag-2"]);
+    await test1(cookie, "antigravity");
+
+    const rows = await db.select().from(schema.models).where(eq(schema.models.ownedBy, "antigravity"));
+    expect(rows.find((r) => r.modelId === "ag-1")!.probeOk).toBe(true);
+    expect(rows.find((r) => r.modelId === "ag-2")!.probeOk).toBe(false);
+  });
+
+  /* The property that separates this from a refresh. */
+  test("never adds or removes a model", async () => {
+    await seedOwned([{ id: "ag-1", ownedBy: "antigravity" }]);
+    probesFailingFor([]);
+
+    const before = (await db.select().from(schema.models).where(eq(schema.models.providerId, providerId))).length;
+    await test1(cookie, "antigravity");
+    const after = (await db.select().from(schema.models).where(eq(schema.models.providerId, providerId))).length;
+    expect(after).toBe(before);
+  });
+
+  test("an upstream with no models costs nothing", async () => {
+    probesFailingFor([]);
+    expect(await body<{ tested: number; usable: number }>(await test1(cookie, "nobody"))).toEqual({ tested: 0, usable: 0 });
+  });
+
+  test("a stranger cannot spend your API budget", async () => {
+    await seedOwned([{ id: "ag-1", ownedBy: "antigravity" }]);
+    await db.insert(schema.users).values({
+      id: "stranger-test", email: "st@x.com",
+      passwordHash: await Bun.password.hash(PASSWORD, { algorithm: "argon2id" }),
+      instanceRole: "user", status: "active", createdAt: Date.now(),
+    });
+    const strangerCookie = cookieFrom(
+      await app.request("/api/auth/login", json({ email: "st@x.com", password: PASSWORD })),
+    );
+
+    expect((await test1(strangerCookie, "antigravity")).status).toBe(404);
+  });
+});
