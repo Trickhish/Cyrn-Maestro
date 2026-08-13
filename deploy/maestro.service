@@ -1,4 +1,4 @@
-# Maestro demo — systemd unit.
+# Maestro — systemd unit.
 #
 #   cp deploy/maestro.service /etc/systemd/system/
 #   systemctl daemon-reload
@@ -6,26 +6,34 @@
 #
 # Serves the built webapp on 127.0.0.1:3000. It deliberately does not listen on
 # a public interface — the reverse proxy is the only thing that should reach it.
+#
+# Secrets come from /home/maestro/.env, which Bun loads from the working
+# directory. Keeping them in a 0600 file rather than in this unit keeps them out
+# of `systemctl show`, which any user can read.
 
 [Unit]
 Description=Maestro webapp
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=/home/maestro
-Environment=PORT=3000
-Environment=HOST=127.0.0.1
 ExecStart=/root/.bun/bin/bun run apps/server/src/index.ts
-Restart=on-failure
+Restart=always
 RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=30
 
-# The demo serves static files and nothing else, so it needs no write access.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadOnlyPaths=/home/maestro
+# The database lives here and is written on every task, so this is the one
+# path that must stay writable — SQLite's -wal and -shm sit beside the file.
+# Everything else, including the code and the built webapp, is read-only:
+# nothing in normal operation should be rewriting those.
+ReadWritePaths=/home/maestro/data
 
 [Install]
 WantedBy=multi-user.target
