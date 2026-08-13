@@ -25,6 +25,7 @@ import { getKnowledge } from "../projects/knowledge";
 import { checkSpend } from "../router/spend";
 import { ProviderError } from "../providers/types";
 import { awaitResult, sendToNode, subscribeToTask, getLiveNode, noteReleased } from "../nodes/registry";
+import { followUpOnTask } from "../conductor/followup";
 
 /* The agent loop.
  *
@@ -791,9 +792,17 @@ async function finish(taskId: string, status: TaskStatus, error?: string) {
     .where(eq(schema.tasks.id, taskId))
     .limit(1);
 
-  if (task?.nodeId && (status === "completed" || status === "failed" || status === "cancelled")) {
-    noteReleased(task.nodeId, taskId);
-    sendToNode(task.nodeId, { type: "task.release", id: newId(), taskId, status });
+  if (status === "completed" || status === "failed" || status === "cancelled") {
+    if (task?.nodeId) {
+      noteReleased(task.nodeId, taskId);
+      sendToNode(task.nodeId, { type: "task.release", id: newId(), taskId, status });
+    }
+
+    /* Tell the Conductor how its own dispatch went. Detached on purpose: this
+       is a model call, and the task is already finished and recorded — nothing
+       here should wait on commentary about it. Does nothing for a task a human
+       dispatched. */
+    void followUpOnTask(taskId);
   }
 }
 

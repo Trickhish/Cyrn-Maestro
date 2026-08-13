@@ -599,6 +599,11 @@ async function createTaskTool(
       title: args.title,
       model,
       nodeId: context.pinnedNodeId,
+      /* Stamped with the thread this dispatch came from, so the task can
+         report back into it when it finishes without anyone watching. The
+         thread is the context's project — the global Conductor has none, even
+         when dispatching into a project. */
+      conductor: { actorUserId: actor.id, threadProjectId: context.projectId ?? null },
     });
     return `Dispatched [${created.taskId}] "${created.title}" to ${created.nodeName} on ${created.model}.`;
   } catch (err) {

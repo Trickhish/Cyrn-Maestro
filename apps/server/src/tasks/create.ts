@@ -20,6 +20,12 @@ export interface CreateTaskInput {
   title?: string;
   nodeId?: string;
   model?: string;
+  /* Set only when the Conductor is dispatching, naming the thread that should
+     hear how it went. Recorded on the task so the report can be triggered where
+     the task finishes rather than by whoever happens to have a browser open —
+     see conductor/followup.ts. `threadProjectId` is null for the global
+     Conductor, which is not the same as the task's own project. */
+  conductor?: { actorUserId: string; threadProjectId: string | null };
 }
 
 export interface CreatedTask {
@@ -109,6 +115,8 @@ export async function createTask(actor: Actor, input: CreateTaskInput): Promise<
     /* Only true when the caller passed `model` themselves — the router's own
        default pick is not a pin, and stays free to fail over. */
     modelPinned: Boolean(input.model),
+    conductorActorId: input.conductor?.actorUserId ?? null,
+    conductorProjectId: input.conductor?.threadProjectId ?? null,
     costUsd: 0,
     inputTokens: 0,
     outputTokens: 0,

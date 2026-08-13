@@ -628,6 +628,10 @@ export const api = {
   conductorHistory: (projectId?: string) =>
     request<{
       messages: Array<{
+        /* Lets a poller tell "same thread" from "something was added" without
+           diffing content — a background follow-up can append to this thread
+           with no request from the browser at all. */
+        id: string;
         role: "user" | "assistant";
         content: string;
         model: string | null;

@@ -1,8 +1,8 @@
 import { Hono } from "hono";
-import { and, desc, eq, isNull, notInArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db";
 import { askConductor, CONDUCTOR_LIST_NAME } from "../conductor/runner";
+import { loadThread, remember, thread } from "../conductor/thread";
 import { NoProviderError, modelListMembers } from "../providers/gateway";
 import { ProviderError } from "../providers/types";
 import { can, projectScope } from "../lib/permissions";
@@ -46,9 +46,10 @@ const Ask = z.object({
     .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() }))
     .max(40)
     .optional(),
-  /* Set for the follow-up the interface fires itself when a dispatched task
-     finishes. The answer belongs in the thread; the question does not, because
-     the user never typed it. */
+  /* Keeps the question out of the thread while still recording the answer.
+     Nothing in the interface sends it any more — the follow-up that used to
+     lives on the server now (conductor/followup.ts), which writes the thread
+     directly. Kept so an older client is not rejected. */
   silent: z.boolean().optional(),
   /* Set when the Conductor is embedded on a specific project's own page —
      its tools then default to that project rather than needing the model to
@@ -64,84 +65,9 @@ const Ask = z.object({
   conductorModel: z.string().optional(),
 });
 
-/* How much of a thread is kept.
- *
- * Enough that the Conductor knows what you just asked it to do, and that
- * reopening the page continues a conversation rather than starting one. Not so
- * much that it becomes an archive: old turns cost tokens on every call and
- * answer questions nobody is asking any more. Trimmed on write, so the bound
- * holds without a sweeper. */
-const THREAD_LIMIT = 40;
-
-/* One thread per person per project. The global screen is its own, with a null
-   projectId — and `isNull` rather than `eq(null)`, which matches nothing. */
-const thread = (actorId: string, projectId?: string) =>
-  and(
-    eq(schema.conductorMessages.actorUserId, actorId),
-    projectId
-      ? eq(schema.conductorMessages.projectId, projectId)
-      : isNull(schema.conductorMessages.projectId),
-  );
-
-async function loadThread(actorId: string, projectId?: string) {
-  const rows = await db
-    .select()
-    .from(schema.conductorMessages)
-    .where(thread(actorId, projectId))
-    .orderBy(desc(schema.conductorMessages.createdAt))
-    .limit(THREAD_LIMIT);
-  return rows.reverse();
-}
-
-async function remember(
-  actorId: string,
-  projectId: string | undefined,
-  role: "user" | "assistant",
-  content: string,
-  model?: string,
-  tools?: unknown,
-) {
-  if (!content.trim()) return;
-
-  await db.insert(schema.conductorMessages).values({
-    id: crypto.randomUUID(),
-    projectId: projectId ?? null,
-    actorUserId: actorId,
-    role,
-    content,
-    model: model ?? null,
-    tools: tools ?? null,
-    createdAt: Date.now(),
-  });
-
-  /* Trim by id rather than a date cutoff: two turns in the same millisecond
-     are ordinary, and a cutoff would keep or drop both. */
-  const keep = await db
-    .select({ id: schema.conductorMessages.id })
-    .from(schema.conductorMessages)
-    .where(thread(actorId, projectId))
-    .orderBy(desc(schema.conductorMessages.createdAt))
-    .limit(THREAD_LIMIT);
-
-  /* Anything outside the newest THREAD_LIMIT goes. Only worth a query when the
-     thread is actually at the bound. */
-  if (keep.length === THREAD_LIMIT) {
-    await db
-      .delete(schema.conductorMessages)
-      .where(
-        and(
-          thread(actorId, projectId),
-          notInArray(
-            schema.conductorMessages.id,
-            keep.map((k) => k.id),
-          ),
-        ),
-      );
-  }
-}
-
 /* The thread as it stands, so reopening the page continues rather than
-   restarts. */
+   restarts — and so a browser polling this sees follow-ups written by the
+   background job while it was sitting there. */
 conductorRoutes.get("/history", async (c) => {
   const actor = requireActor(c);
   const rows = await loadThread(actor.id, c.req.query("projectId"));
@@ -149,6 +75,9 @@ conductorRoutes.get("/history", async (c) => {
     messages: rows.map((r) => {
       const tools = (r.tools ?? []) as Array<{ name: string; args: unknown; result: string }>;
       return {
+        /* Sent so a poller can tell "same thread" from "something was added"
+           without diffing content. */
+        id: r.id,
         role: r.role,
         content: r.content,
         model: r.model,

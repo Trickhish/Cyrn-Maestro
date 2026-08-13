@@ -5,6 +5,7 @@ import { buildDaemonBundle, daemonDigest } from "./http/install";
 import { handleNodeMessage, handleDisconnect, type SocketSession } from "./nodes/registry";
 
 import { recoverOrphanedTasks } from "./tasks/recovery";
+import { followUpOnMissed } from "./conductor/followup";
 import { backfillModelPrices } from "./providers/backfill";
 
 /* Fail at boot rather than at the first request that needs a key. */
@@ -17,6 +18,16 @@ const recovered = await recoverOrphanedTasks();
 if (recovered > 0) {
   console.log(`recovered        ${recovered} task${recovered === 1 ? "" : "s"} orphaned by a restart`);
 }
+
+/* A task that finished while the process was down — including one the sweep
+   above just failed — never fired its in-process trigger, so the Conductor owes
+   a report on it. Detached: these are model calls, and nothing about accepting
+   traffic depends on them. */
+void followUpOnMissed().then((missed) => {
+  if (missed > 0) {
+    console.log(`followed up      ${missed} task${missed === 1 ? "" : "s"} that ended while down`);
+  }
+});
 
 /* Models stored before there was a price table record no cost, which makes
    every spend cap over them decorative. Priced here so an existing instance is

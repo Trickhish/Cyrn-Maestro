@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, type ConductorProgress, type TaskSummary } from "../lib/api";
 import { Composer, type SlashCommand } from "../components/Composer";
 
@@ -65,70 +65,54 @@ export function Conductor({
   const [progress, setProgress] = useState<ConductorProgress[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
-  /* Dispatched task ids already followed up on, so the automatic follow-up
-     fires once each. Declared here because loaded history seeds it — see the
-     seeding effect below and the watcher further down. */
-  const reported = useRef(new Set<string>());
-  /* Both loads have to land before history can be seeded, and seeding may only
-     happen once — see the seeding effect for why each of these matters. */
-  const historyLoaded = useRef(false);
-  const seeded = useRef(false);
+  /* The ids of the thread as the server last showed it, so a poll can tell
+     "nothing new" from "something was added" without diffing content. */
+  const serverIds = useRef("");
+  /* Local, un-persisted messages: the question just typed and any error, which
+     exist in this tab before (or instead of) the server having them. Kept apart
+     so a poll can replace the server's half without discarding them. */
+  const [local, setLocal] = useState<Message[]>([]);
 
-  /* The thread is the server's, so a reload continues it. Loaded once per
-     project rather than polled: it only changes when this page changes it. */
-  useEffect(() => {
-    let cancelled = false;
-    /* A different project is a different thread, so the seeding below has to
-       run again against it. */
-    historyLoaded.current = false;
-    seeded.current = false;
-    reported.current.clear();
+  /* The thread is the server's, so a reload continues it — and polled rather
+     than loaded once, because this tab is no longer the only thing that writes
+     to it. A task finishing reports back from a background job on the server
+     (conductor/followup.ts), so a conversation left open has to notice work
+     appearing in it that nobody in this tab asked for. */
+  const refresh = useCallback(async () => {
+    const r = await api.conductorHistory(projectId).catch(() => null);
+    if (!r) return;
 
-    api
-      .conductorHistory(projectId)
-      .then((r) => {
-        if (!cancelled) {
-          setMessages(
-            r.messages.map((m) => ({
-              role: m.role,
-              content: m.content,
-              model: m.model ?? undefined,
-              usedTools: m.usedTools?.length ? m.usedTools : undefined,
-              ...(m.dispatched?.length ? { dispatched: m.dispatched } : {}),
-            })),
-          );
-          historyLoaded.current = true;
-        }
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
+    /* Cheap identity for the thread. Unchanged means nothing to do —
+       re-rendering the whole conversation every few seconds would fight with
+       expanded tool rows and the scroll position. */
+    const ids = r.messages.map((m) => m.id).join(",");
+    if (ids === serverIds.current) return;
+    serverIds.current = ids;
+
+    setMessages(
+      r.messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        model: m.model ?? undefined,
+        usedTools: m.usedTools?.length ? m.usedTools : undefined,
+        ...(m.dispatched?.length ? { dispatched: m.dispatched } : {}),
+      })),
+    );
+    /* Whatever the server now has, it has — the optimistic copy of the
+       question has served its purpose. Errors stay: they were never persisted,
+       so nothing in the thread would replace them. */
+    setLocal((l) => l.filter((m) => m.error));
   }, [projectId]);
 
-  /* Which of history's dispatched tasks still deserve a follow-up.
-   *
-   * Status is what separates the two failure modes, so this waits for the task
-   * list rather than seeding off history alone. A task already finished when
-   * the page opened is treated as reported: either its follow-up is in the
-   * history above, or it ended while nobody was watching — and re-answering it
-   * on load is what made the Conductor repeat itself on every reload. A task
-   * still running is deliberately left unseeded, so the follow-up fires when it
-   * actually finishes; seeding those too is what stopped completions from being
-   * noticed at all. Runs once per thread: after this, ids are added only by the
-   * watcher as it reports them. */
   useEffect(() => {
-    if (seeded.current || !historyLoaded.current || tasks.length === 0) return;
+    serverIds.current = "";
+    setMessages([]);
+    setLocal([]);
 
-    for (const message of messages) {
-      for (const id of message.dispatched ?? []) {
-        const task = tasks.find((t) => t.id === id);
-        /* Unknown means gone or out of scope — nothing to report on either. */
-        if (!task || TERMINAL.includes(task.status)) reported.current.add(id);
-      }
-    }
-    seeded.current = true;
-  }, [messages, tasks]);
+    void refresh();
+    const timer = setInterval(() => void refresh(), 4000);
+    return () => clearInterval(timer);
+  }, [refresh]);
 
   useEffect(() => {
     const load = () => api.tasks(projectId).then((t) => setTasks(t.tasks)).catch(() => {});
@@ -140,16 +124,24 @@ export function Conductor({
   useEffect(() => {
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length, busy]);
+  }, [messages.length, local.length, busy]);
 
   const live = tasks.filter((t) => !TERMINAL.includes(t.status));
   const needsYou = live.filter((t) => t.status === "awaiting_approval");
 
-  /* `silent` is for the follow-up the panel fires itself once a dispatched
-     task finishes: the Conductor's answer belongs in the thread, but the
-     question does not — the user never typed it. */
-  async function ask(question: string, silent = false) {
-    if (!silent) setMessages((m) => [...m, { role: "user", content: question }]);
+  /* What the conversation actually reads as: the persisted thread, then
+     whatever only this tab knows about — the question in flight and any error
+     the server never kept. */
+  const shown = [...messages, ...local];
+
+  /* Both halves of the turn are persisted by the server, so the answer is not
+     appended here — the poll above picks up the question and the answer
+     together, in the form they will have on every future load. Until then the
+     question shows optimistically, because waiting up to four seconds to see
+     what you just typed reads as a dropped message. */
+  async function ask(question: string) {
+    const typed: Message = { role: "user", content: question };
+    setLocal((l) => [...l.filter((m) => !m.error), typed]);
     setBusy(true);
     setProgress([]);
 
@@ -163,30 +155,24 @@ export function Conductor({
           pinnedModelList: pinnedModelList || undefined,
           pinnedNodeId: pinnedNodeId || undefined,
           conductorModel: conductorModel || undefined,
-          silent,
         },
         (event) => setProgress((p) => [...p, event]),
       );
 
-      const dispatched = answer.dispatched ?? [];
-
-      setMessages((m) => [
-        ...m,
-        {
-          role: "assistant",
-          content: answer.text,
-          usedTools: answer.usedTools,
-          model: answer.model,
-          ...(dispatched.length ? { dispatched } : {}),
-        },
-      ]);
+      /* Force the next poll to take the thread even though it may look
+         unchanged by id alone, then let it render both messages at once. */
+      serverIds.current = "";
+      await refresh();
 
       /* A turn that dispatched something changes the task list behind this
          panel, so the page refreshes rather than waiting out its poll. */
-      if (dispatched.length) onDispatched?.();
+      if (answer.dispatched?.length) onDispatched?.();
     } catch (err) {
-      setMessages((m) => [
-        ...m,
+      /* Errors are never persisted, so this one lives only in this tab —
+         alongside the question that caused it, which the server did not keep
+         either. */
+      setLocal((l) => [
+        ...l,
         {
           role: "assistant",
           content: err instanceof ApiError ? err.message : "Could not reach the Conductor.",
@@ -199,42 +185,12 @@ export function Conductor({
     }
   }
 
-  /* Closing the loop on dispatched work.
-   *
-   * The Conductor cannot watch a task — a turn ends when it answers. So the
-   * panel watches instead, and asks it one more question the moment a task it
-   * started reaches a terminal state. Reported ids are remembered in a ref
-   * rather than state: the task list is re-polled every four seconds, and
-   * anything less durable would ask again on every tick. `reported` is
-   * declared with the other refs above, since history loading seeds it. */
-  const askRef = useRef(ask);
-  askRef.current = ask;
-
-  useEffect(() => {
-    if (busy) return;
-
-    const mine = new Set(messages.flatMap((m) => m.dispatched ?? []));
-    const done = tasks.find(
-      (t) => mine.has(t.id) && TERMINAL.includes(t.status) && !reported.current.has(t.id),
-    );
-    if (!done) return;
-
-    /* Marked before the call, not after: an in-flight follow-up must not be
-       started twice by the next poll. */
-    reported.current.add(done.id);
-    void askRef.current(
-      `The task [${done.id}] you dispatched has finished with status "${done.status}". ` +
-        `Read what it actually did with get_task and tell me the outcome in a sentence or two. ` +
-        `If it failed or the work needs another pass, say so and what you would dispatch next.`,
-      true,
-    );
-  }, [tasks, messages, busy]);
-
   /* Wipes the persisted thread on the server too, not just the local view —
      otherwise the next reload brings the "cleared" messages right back. */
   async function clearThread() {
     setMessages([]);
-    reported.current.clear();
+    setLocal([]);
+    serverIds.current = "";
     await api.clearConductorHistory(projectId).catch(() => {});
   }
 
@@ -276,7 +232,7 @@ export function Conductor({
         ref={scroller}
         className="flex-1 min-h-0 overflow-auto scroll-quiet px-4 md:px-[26px] py-5 flex flex-col gap-[18px]"
       >
-        {messages.length === 0 && (
+        {shown.length === 0 && (
           <div className="flex flex-col gap-4 max-w-[760px]">
             <p className="prose-msg">
               {embedded
@@ -314,7 +270,7 @@ export function Conductor({
           </div>
         )}
 
-        {messages.map((message, i) => (
+        {shown.map((message, i) => (
           <div key={i} className="flex flex-col gap-2 max-w-[760px]">
             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
               <span className="speaker">{message.role === "user" ? "you" : "conductor"}</span>

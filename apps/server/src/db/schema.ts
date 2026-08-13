@@ -686,6 +686,23 @@ export const tasks = sqliteTable(
     inputTokens: integer("input_tokens").notNull().default(0),
     outputTokens: integer("output_tokens").notNull().default(0),
     error: text("error"),
+    /* Set when the Conductor dispatched this task, naming the thread to report
+       back into: the user whose conversation it was, and which of their threads
+       (a project's own, or null for the global one — which is not the same as
+       the task's own projectId, since the global Conductor dispatches into
+       projects too). Null means a human dispatched it directly, and nothing
+       follows up. */
+    conductorActorId: text("conductor_actor_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    conductorProjectId: text("conductor_project_id").references(() => projects.id, {
+      onDelete: "cascade",
+    }),
+    /* Set the moment a follow-up is claimed, before the model call — the claim
+       is what stops a restart or a second trigger from reporting twice. */
+    conductorFollowedUp: integer("conductor_followed_up", { mode: "boolean" })
+      .notNull()
+      .default(false),
     startedAt: integer("started_at"),
     endedAt: integer("ended_at"),
     createdAt: now(),
