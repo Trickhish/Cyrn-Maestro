@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq, isNull, notInArray, or } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db";
 import { encryptSecret } from "../lib/crypto";
@@ -193,6 +193,24 @@ providerRoutes.post("/:id/refresh", async (c) => {
         .onConflictDoNothing();
     }
 
+    /* A refresh is what the provider offers now, not everything it has ever
+       offered. Without this, models withdrawn upstream stay in the picker and
+       in every list forever — and the count quietly drifts, which is how a
+       catalogue ends up half stale with nothing saying so.
+     *
+       Skipped when the listing came back empty: a provider having a bad
+       moment must not be read as "it offers nothing", which would delete the
+       whole catalogue and take every hand-set tier and price with it. */
+    let removed = 0;
+    if (models.length > 0) {
+      const offered = models.map((m) => m.id);
+      const gone = await db
+        .delete(schema.models)
+        .where(and(eq(schema.models.providerId, row.id), notInArray(schema.models.modelId, offered)))
+        .returning({ id: schema.models.id });
+      removed = gone.length;
+    }
+
     let usable = models.length;
     let probed = 0;
 
@@ -287,6 +305,9 @@ providerRoutes.post("/:id/refresh", async (c) => {
       /* Stated rather than implied: a caller should know the difference between
          "verified working" and "listed but never tried". */
       unprobed: models.length - probed,
+      /* Said out loud: a refresh that quietly drops models is worse than one
+         that explains it, especially the first time a big catalogue shrinks. */
+      removed,
     });
   } catch (err) {
     await db

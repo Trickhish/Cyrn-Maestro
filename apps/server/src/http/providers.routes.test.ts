@@ -1,4 +1,4 @@
-import { expect, test, describe, beforeEach } from "bun:test";
+import { expect, test, describe, beforeEach, afterEach } from "bun:test";
 import { and, eq } from "drizzle-orm";
 import { app } from "../app";
 import { db, schema } from "../db";
@@ -316,5 +316,95 @@ describe("removing a provider", () => {
   test("a provider that does not exist is a 404", async () => {
     const res = await app.request("/api/providers/no-such-provider", withCookie(cookie, { method: "DELETE" }));
     expect(res.status).toBe(404);
+  });
+});
+
+/* A refresh is what the provider offers now, not everything it has ever
+ * offered. Models withdrawn upstream used to stay in the picker and in every
+ * list forever, so a catalogue that had shrunk from 669 to 379 still showed
+ * 669 with nothing saying which were real. */
+describe("refreshing a provider's models", () => {
+  const realFetch = globalThis.fetch;
+
+  /* Only /models is stubbed; probing is skipped with ?probe=0 so the test
+     asserts reconciliation rather than the probe budget. */
+  function offering(ids: string[]) {
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: ids.map((id) => ({ id })) }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response("{}", { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+  }
+
+  const refresh = () =>
+    app.request(`/api/providers/${providerId}/refresh?probe=0`, withCookie(cookie, { method: "POST" }));
+
+  const storedIds = async () =>
+    (await db.select().from(schema.models).where(eq(schema.models.providerId, providerId)))
+      .map((m) => m.modelId)
+      .sort();
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  test("adds what is newly offered", async () => {
+    offering(["a", "b"]);
+    expect((await refresh()).status).toBe(200);
+    expect(await storedIds()).toEqual(["a", "b"]);
+  });
+
+  test("drops what the provider no longer offers, and says how many", async () => {
+    await seedModels([{ id: "gone-1" }, { id: "gone-2" }, { id: "kept" }]);
+
+    offering(["kept", "new"]);
+    const res = await refresh();
+    expect((await body(res)).removed).toBe(2);
+    expect(await storedIds()).toEqual(["kept", "new"]);
+  });
+
+  /* The guard that matters: a provider having a bad moment must not be read
+     as "it offers nothing", which would delete the catalogue and take every
+     hand-set tier and price with it. */
+  test("an empty listing changes nothing", async () => {
+    await seedModels([{ id: "a" }, { id: "b" }]);
+
+    offering([]);
+    const res = await refresh();
+    expect((await body(res)).removed).toBe(0);
+    expect(await storedIds()).toEqual(["a", "b"]);
+  });
+
+  test("a hand-set tier survives a refresh that keeps the model", async () => {
+    await seedModels([{ id: "kept", tier: "heavy", source: "manual" }]);
+
+    offering(["kept"]);
+    await refresh();
+    expect((await tierOf("kept")).tier).toBe("heavy");
+    expect((await tierOf("kept")).source).toBe("manual");
+  });
+
+  test("only this provider's models are reconciled", async () => {
+    const other = crypto.randomUUID();
+    await db.insert(schema.providerConnections).values({
+      id: other, ownerUserId: (await db.select().from(schema.users).limit(1))[0].id,
+      ownerOrgId: null, name: "Other", kind: "openai_compatible",
+      baseUrl: "https://other.test/v1", encryptedKey: encryptSecret("k"),
+      enabled: true, lastHealthAt: null, lastHealthOk: null, createdAt: Date.now(),
+    });
+    await db.insert(schema.models).values({
+      id: crypto.randomUUID(), providerId: other, modelId: "theirs",
+      tier: "standard", tierSource: "inferred", contextWindow: null,
+      priceInPerMTok: null, priceOutPerMTok: null, enabled: true, needsReasoningEffort: false,
+    });
+
+    offering(["mine"]);
+    await refresh();
+
+    const theirs = await db.select().from(schema.models).where(eq(schema.models.providerId, other));
+    expect(theirs).toHaveLength(1);
   });
 });
