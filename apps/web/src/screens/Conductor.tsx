@@ -66,14 +66,24 @@ export function Conductor({
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
   /* Dispatched task ids already followed up on, so the automatic follow-up
-     fires once each. Declared here because history loading seeds it — see the
-     effect below and the watcher further down. */
+     fires once each. Declared here because loaded history seeds it — see the
+     seeding effect below and the watcher further down. */
   const reported = useRef(new Set<string>());
+  /* Both loads have to land before history can be seeded, and seeding may only
+     happen once — see the seeding effect for why each of these matters. */
+  const historyLoaded = useRef(false);
+  const seeded = useRef(false);
 
   /* The thread is the server's, so a reload continues it. Loaded once per
      project rather than polled: it only changes when this page changes it. */
   useEffect(() => {
     let cancelled = false;
+    /* A different project is a different thread, so the seeding below has to
+       run again against it. */
+    historyLoaded.current = false;
+    seeded.current = false;
+    reported.current.clear();
+
     api
       .conductorHistory(projectId)
       .then((r) => {
@@ -87,12 +97,7 @@ export function Conductor({
               ...(m.dispatched?.length ? { dispatched: m.dispatched } : {}),
             })),
           );
-          /* Anything dispatched in loaded history was already followed up on
-             (its answer is in that history) or finished before this page
-             existed. Either way it must not trigger a fresh follow-up — that
-             is what made the Conductor re-answer the last task on every
-             reload. */
-          for (const m of r.messages) for (const id of m.dispatched ?? []) reported.current.add(id);
+          historyLoaded.current = true;
         }
       })
       .catch(() => {});
@@ -100,6 +105,30 @@ export function Conductor({
       cancelled = true;
     };
   }, [projectId]);
+
+  /* Which of history's dispatched tasks still deserve a follow-up.
+   *
+   * Status is what separates the two failure modes, so this waits for the task
+   * list rather than seeding off history alone. A task already finished when
+   * the page opened is treated as reported: either its follow-up is in the
+   * history above, or it ended while nobody was watching — and re-answering it
+   * on load is what made the Conductor repeat itself on every reload. A task
+   * still running is deliberately left unseeded, so the follow-up fires when it
+   * actually finishes; seeding those too is what stopped completions from being
+   * noticed at all. Runs once per thread: after this, ids are added only by the
+   * watcher as it reports them. */
+  useEffect(() => {
+    if (seeded.current || !historyLoaded.current || tasks.length === 0) return;
+
+    for (const message of messages) {
+      for (const id of message.dispatched ?? []) {
+        const task = tasks.find((t) => t.id === id);
+        /* Unknown means gone or out of scope — nothing to report on either. */
+        if (!task || TERMINAL.includes(task.status)) reported.current.add(id);
+      }
+    }
+    seeded.current = true;
+  }, [messages, tasks]);
 
   useEffect(() => {
     const load = () => api.tasks(projectId).then((t) => setTasks(t.tasks)).catch(() => {});
