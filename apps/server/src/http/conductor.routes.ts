@@ -192,7 +192,13 @@ conductorRoutes.post("/ask", async (c) => {
       text: turn.text,
       /* The tools it used, so the interface can show its work rather than
          asking the user to trust an unsourced answer. */
-      usedTools: turn.toolCalls.map((call) => ({ name: call.name, args: call.args })),
+      usedTools: turn.toolCalls.map((call) => ({
+        name: call.name,
+        args: call.args,
+        /* Sent so the chat can show its work the way a task thread does —
+           what was asked and what came back, not just which tools ran. */
+        result: call.result,
+      })),
       /* What this turn actually dispatched, read from the tool's own result
          rather than from the model's prose — it does not reliably quote the
          id back, and a card the interface only draws when the sentence

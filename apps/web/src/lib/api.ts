@@ -536,7 +536,7 @@ export const api = {
   ) =>
     post<{
       text: string;
-      usedTools: Array<{ name: string; args: unknown }>;
+      usedTools: Array<{ name: string; args: unknown; result: string }>;
       /* Task ids this turn dispatched, taken from the tool's own result. */
       dispatched: string[];
       usage: { inputTokens: number; outputTokens: number };

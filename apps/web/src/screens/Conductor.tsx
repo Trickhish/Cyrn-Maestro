@@ -12,7 +12,7 @@ import { Composer } from "../components/Composer";
 interface Message {
   role: "user" | "assistant";
   content: string;
-  usedTools?: Array<{ name: string; args: unknown }>;
+  usedTools?: Array<{ name: string; args: unknown; result: string }>;
   model?: string;
   error?: boolean;
   /* Tasks this turn dispatched. Rendered as live cards under the message and
@@ -294,14 +294,9 @@ export function Conductor({
             {/* Shows its work: which lookups the answer came from, so it is
                 not asking to be taken on trust. */}
             {message.usedTools?.length ? (
-              <div className="flex flex-wrap gap-1.5">
-                {[...new Set(message.usedTools.map((t) => t.name))].map((tool) => (
-                  <span
-                    key={tool}
-                    className="font-mono text-[10px] text-faint border rule rounded px-1.5 py-0.5"
-                  >
-                    {tool}
-                  </span>
+              <div className="flex flex-col">
+                {message.usedTools.map((call, j) => (
+                  <ToolRow key={j} call={call} />
                 ))}
               </div>
             ) : null}
@@ -396,6 +391,39 @@ function TaskCard({ task, onOpen }: { task: TaskSummary; onOpen: () => void }) {
           Open thread ↗
         </button>
       </div>
+    </div>
+  );
+}
+
+
+/* What the Conductor actually did to answer, in the order it did it.
+ *
+ * The same row a task thread uses, for the same reason: a name alone says
+ * something ran, not what it was asked or what came back. Collapsed by
+ * default — the answer is the point, and this is the receipt. */
+function ToolRow({ call }: { call: { name: string; args: unknown; result: string } }) {
+  const [open, setOpen] = useState(false);
+
+  /* The interesting argument, not the whole object: a task's prompt, a
+     model list's name, a task id. Falls back to compact JSON. */
+  const args = (call.args ?? {}) as Record<string, unknown>;
+  const summary =
+    [args.prompt, args.title, args.modelList, args.model, args.taskId, args.query, args.text, args.value]
+      .find((v) => typeof v === "string" && v) as string | undefined;
+
+  return (
+    <div>
+      <button type="button" className="tool-row" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="text-faint w-2.5 flex-none">{open ? "▾" : "▸"}</span>
+        <span className="text-tertiary w-[112px] flex-none truncate">{call.name}</span>
+        <span className="text-secondary truncate">{summary ?? ""}</span>
+      </button>
+
+      {open && (
+        <pre className="ml-[22px] my-1 px-3 py-2 bg-inset border rule rounded-md font-mono text-[11.5px] leading-[1.6] text-tertiary whitespace-pre-wrap overflow-x-auto scroll-quiet max-h-[300px]">
+          {call.result}
+        </pre>
+      )}
     </div>
   );
 }
