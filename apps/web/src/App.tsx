@@ -116,7 +116,7 @@ export default function App() {
 
       {/* The column that holds the screen. On a phone it carries a bar with the
           menu button, because the rail is off-canvas and otherwise unreachable. */}
-      <div className="flex-1 min-w-0 flex flex-col">
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
         <div className="md:hidden h-12 flex-none flex items-center gap-2.5 px-3 border-b rule bg-canvas-alt">
           <button
             type="button"

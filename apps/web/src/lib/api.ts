@@ -546,7 +546,15 @@ export const api = {
   /* The thread as the server has it, so reopening a page continues the
      conversation rather than starting a new one. */
   conductorHistory: (projectId?: string) =>
-    request<{ messages: Array<{ role: "user" | "assistant"; content: string; model: string | null }> }>(
+    request<{
+      messages: Array<{
+        role: "user" | "assistant";
+        content: string;
+        model: string | null;
+        usedTools: Array<{ name: string; args: unknown; result: string }>;
+        dispatched: string[];
+      }>;
+    }>(
       `/conductor/history${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`,
     ),
   clearConductorHistory: (projectId?: string) =>

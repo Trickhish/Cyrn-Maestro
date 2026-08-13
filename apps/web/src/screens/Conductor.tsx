@@ -71,7 +71,15 @@ export function Conductor({
       .conductorHistory(projectId)
       .then((r) => {
         if (!cancelled) {
-          setMessages(r.messages.map((m) => ({ role: m.role, content: m.content, model: m.model ?? undefined })));
+          setMessages(
+            r.messages.map((m) => ({
+              role: m.role,
+              content: m.content,
+              model: m.model ?? undefined,
+              usedTools: m.usedTools?.length ? m.usedTools : undefined,
+              ...(m.dispatched?.length ? { dispatched: m.dispatched } : {}),
+            })),
+          );
         }
       })
       .catch(() => {});

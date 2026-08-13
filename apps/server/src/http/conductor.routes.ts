@@ -99,6 +99,7 @@ async function remember(
   role: "user" | "assistant",
   content: string,
   model?: string,
+  tools?: unknown,
 ) {
   if (!content.trim()) return;
 
@@ -109,6 +110,7 @@ async function remember(
     role,
     content,
     model: model ?? null,
+    tools: tools ?? null,
     createdAt: Date.now(),
   });
 
@@ -144,7 +146,22 @@ conductorRoutes.get("/history", async (c) => {
   const actor = requireActor(c);
   const rows = await loadThread(actor.id, c.req.query("projectId"));
   return c.json({
-    messages: rows.map((r) => ({ role: r.role, content: r.content, model: r.model })),
+    messages: rows.map((r) => {
+      const tools = (r.tools ?? []) as Array<{ name: string; args: unknown; result: string }>;
+      return {
+        role: r.role,
+        content: r.content,
+        model: r.model,
+        usedTools: tools,
+        /* Derived rather than stored a second time: the tool's own result is
+           the authority on what was dispatched, here as much as on /ask. */
+        dispatched: tools.flatMap((t) =>
+          t.name === "create_task"
+            ? [...String(t.result).matchAll(/\[([0-9a-f-]{8,})\]/gi)].map((m) => m[1])
+            : [],
+        ),
+      };
+    }),
   });
 });
 
@@ -186,7 +203,14 @@ conductorRoutes.post("/ask", async (c) => {
     );
 
     if (!parsed.data.silent) await remember(actor.id, projectId, "user", parsed.data.question);
-    await remember(actor.id, projectId, "assistant", turn.text, turn.model);
+    await remember(
+      actor.id,
+      projectId,
+      "assistant",
+      turn.text,
+      turn.model,
+      turn.toolCalls.map((call) => ({ name: call.name, args: call.args, result: call.result })),
+    );
 
     return c.json({
       text: turn.text,

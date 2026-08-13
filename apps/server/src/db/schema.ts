@@ -496,6 +496,10 @@ export const conductorMessages = sqliteTable(
     /* Which model answered, so a thread read back later still says what said
        what — the profile can change between one turn and the next. */
     model: text("model"),
+    /* The tool calls behind an answer, so a reloaded thread still shows its
+       work. Without them the receipt survives only until the page is
+       refreshed, which is exactly when someone goes looking for it. */
+    tools: text("tools", { mode: "json" }),
     createdAt: now(),
   },
   (t) => [index("conductor_messages_thread_idx").on(t.actorUserId, t.projectId, t.createdAt)],

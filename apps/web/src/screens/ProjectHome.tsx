@@ -59,7 +59,7 @@ export function ProjectHome({ project, onOpenTask }: ProjectHomeProps) {
   const recent = tasks.filter((t) => ["completed", "failed", "cancelled"].includes(t.status));
 
   return (
-    <section className="flex-1 min-w-0 flex flex-col bg-canvas">
+    <section className="flex-1 min-w-0 min-h-0 flex flex-col bg-canvas">
       <header className="h-[46px] flex-none flex items-center gap-3 px-4 md:px-[26px] border-b rule overflow-x-auto scroll-quiet">
         <h1 className="font-display text-[14px] font-semibold whitespace-nowrap">{project.name}</h1>
         <span className="hidden sm:inline text-[12.5px] text-tertiary whitespace-nowrap">
