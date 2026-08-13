@@ -151,10 +151,20 @@ export function RoutingChips({
         {/* A profile is a first-class choice here, not a shortcut for a model:
             picked, it is resolved at dispatch to whichever of its models is
             actually up, which is the whole point of a list. */}
+        {/* Unpinned, this is not a prediction: the Conductor picks a profile
+            per task from what each one says it is for, so naming the model
+            the price-based router would have chosen would be advertising a
+            choice that is not the one that runs. */}
         <Chip
           label="model"
-          value={pinnedModelList ?? plan.model?.picked.id ?? "none usable"}
-          because={pinnedModelList ? "a profile you pinned" : plan.model?.because}
+          value={pinnedModelList ?? pinnedModel ?? "the Conductor decides"}
+          because={
+            pinnedModelList
+              ? "a profile you pinned"
+              : pinnedModel
+                ? "a model you pinned"
+                : "Chosen per task from your profiles' descriptions. Pin one to override."
+          }
           pinned={Boolean(pinnedModel || pinnedModelList)}
           open={open === "model"}
           onToggle={() => setOpen(open === "model" ? null : "model")}
