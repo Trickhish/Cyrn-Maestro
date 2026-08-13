@@ -468,6 +468,39 @@ export const workspaces = sqliteTable(
  * index below. "memory" is different in kind: free text, never overwritten,
  * append-only — so its label is always null, which the unique index leaves
  * alone (SQLite does not treat two NULLs as equal for uniqueness). */
+/* What was said to the Conductor, and back.
+ *
+ * Losing the thread on every reload is what made it feel like a stranger each
+ * time — and it costs the model the one thing that makes a follow-up useful:
+ * what you just asked it to do.
+ *
+ * Bounded on purpose. A conversation is worth keeping for continuity, not
+ * forever: the oldest are trimmed on write, so a thread stays a working memory
+ * rather than an archive nobody reads and everybody pays to store.
+ *
+ * One thread per person per project — the panel is per-project, and the global
+ * screen is its own thread with a null projectId. Not shared between members:
+ * a colleague's half-finished conversation is confusing context, not helpful
+ * context. */
+export const conductorMessages = sqliteTable(
+  "conductor_messages",
+  {
+    id: id(),
+    /* Null for the global, cross-project screen. */
+    projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
+    actorUserId: text("actor_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    role: text("role", { enum: ["user", "assistant"] }).notNull(),
+    content: text("content").notNull(),
+    /* Which model answered, so a thread read back later still says what said
+       what — the profile can change between one turn and the next. */
+    model: text("model"),
+    createdAt: now(),
+  },
+  (t) => [index("conductor_messages_thread_idx").on(t.actorUserId, t.projectId, t.createdAt)],
+);
+
 export const projectNotes = sqliteTable(
   "project_notes",
   {

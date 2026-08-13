@@ -35,6 +35,7 @@ export function resetDatabase(): void {
      rather than on anything it was actually testing — so this list has to grow
      with the schema. */
   for (const table of [
+    "conductor_messages",
     "task_events",
     "approvals",
     "tasks",

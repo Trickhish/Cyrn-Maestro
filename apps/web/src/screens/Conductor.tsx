@@ -63,6 +63,23 @@ export function Conductor({
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const scroller = useRef<HTMLDivElement>(null);
 
+  /* The thread is the server's, so a reload continues it. Loaded once per
+     project rather than polled: it only changes when this page changes it. */
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .conductorHistory(projectId)
+      .then((r) => {
+        if (!cancelled) {
+          setMessages(r.messages.map((m) => ({ role: m.role, content: m.content, model: m.model ?? undefined })));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
   useEffect(() => {
     const load = () => api.tasks(projectId).then((t) => setTasks(t.tasks)).catch(() => {});
     load();
@@ -86,13 +103,13 @@ export function Conductor({
     setBusy(true);
 
     try {
-      const history = messages.slice(-12).map((m) => ({ role: m.role, content: m.content }));
-      const answer = await api.askConductor(question, history, {
+      const answer = await api.askConductor(question, [], {
         projectId,
         pinnedModel: pinnedModel || undefined,
         pinnedModelList: pinnedModelList || undefined,
         pinnedNodeId: pinnedNodeId || undefined,
         conductorModel: conductorModel || undefined,
+        silent,
       });
 
       const dispatched = answer.dispatched ?? [];

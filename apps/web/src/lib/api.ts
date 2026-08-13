@@ -531,6 +531,7 @@ export const api = {
       pinnedModelList?: string;
       pinnedNodeId?: string;
       conductorModel?: string;
+      silent?: boolean;
     },
   ) =>
     post<{
@@ -541,6 +542,18 @@ export const api = {
       usage: { inputTokens: number; outputTokens: number };
       model: string;
     }>("/conductor/ask", { question, history, ...scope }),
+
+  /* The thread as the server has it, so reopening a page continues the
+     conversation rather than starting a new one. */
+  conductorHistory: (projectId?: string) =>
+    request<{ messages: Array<{ role: "user" | "assistant"; content: string; model: string | null }> }>(
+      `/conductor/history${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`,
+    ),
+  clearConductorHistory: (projectId?: string) =>
+    request<{ ok: true }>(
+      `/conductor/history${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`,
+      { method: "DELETE" },
+    ),
 
   /* The models the Conductor itself may run on: its profile's usable members,
      best first. The picker offers only these. */

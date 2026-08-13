@@ -1,5 +1,7 @@
 import { Hono } from "hono";
+import { and, desc, eq, isNull, notInArray } from "drizzle-orm";
 import { z } from "zod";
+import { db, schema } from "../db";
 import { askConductor, CONDUCTOR_LIST_NAME } from "../conductor/runner";
 import { NoProviderError, modelListMembers } from "../providers/gateway";
 import { ProviderError } from "../providers/types";
@@ -38,10 +40,16 @@ const Ask = z.object({
   /* The client holds the thread. v0.1 keeps no server-side Conductor history —
      conductor_threads lands with organizations, where a durable per-member
      thread actually earns its keep. */
+  /* The thread lives on the server now, so nothing needs sending. Kept only
+     so an older client posting one is not rejected — it is ignored. */
   history: z
     .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() }))
     .max(40)
     .optional(),
+  /* Set for the follow-up the interface fires itself when a dispatched task
+     finishes. The answer belongs in the thread; the question does not, because
+     the user never typed it. */
+  silent: z.boolean().optional(),
   /* Set when the Conductor is embedded on a specific project's own page —
      its tools then default to that project rather than needing the model to
      be told or to ask which one. */
@@ -56,16 +64,116 @@ const Ask = z.object({
   conductorModel: z.string().optional(),
 });
 
+/* How much of a thread is kept.
+ *
+ * Enough that the Conductor knows what you just asked it to do, and that
+ * reopening the page continues a conversation rather than starting one. Not so
+ * much that it becomes an archive: old turns cost tokens on every call and
+ * answer questions nobody is asking any more. Trimmed on write, so the bound
+ * holds without a sweeper. */
+const THREAD_LIMIT = 40;
+
+/* One thread per person per project. The global screen is its own, with a null
+   projectId — and `isNull` rather than `eq(null)`, which matches nothing. */
+const thread = (actorId: string, projectId?: string) =>
+  and(
+    eq(schema.conductorMessages.actorUserId, actorId),
+    projectId
+      ? eq(schema.conductorMessages.projectId, projectId)
+      : isNull(schema.conductorMessages.projectId),
+  );
+
+async function loadThread(actorId: string, projectId?: string) {
+  const rows = await db
+    .select()
+    .from(schema.conductorMessages)
+    .where(thread(actorId, projectId))
+    .orderBy(desc(schema.conductorMessages.createdAt))
+    .limit(THREAD_LIMIT);
+  return rows.reverse();
+}
+
+async function remember(
+  actorId: string,
+  projectId: string | undefined,
+  role: "user" | "assistant",
+  content: string,
+  model?: string,
+) {
+  if (!content.trim()) return;
+
+  await db.insert(schema.conductorMessages).values({
+    id: crypto.randomUUID(),
+    projectId: projectId ?? null,
+    actorUserId: actorId,
+    role,
+    content,
+    model: model ?? null,
+    createdAt: Date.now(),
+  });
+
+  /* Trim by id rather than a date cutoff: two turns in the same millisecond
+     are ordinary, and a cutoff would keep or drop both. */
+  const keep = await db
+    .select({ id: schema.conductorMessages.id })
+    .from(schema.conductorMessages)
+    .where(thread(actorId, projectId))
+    .orderBy(desc(schema.conductorMessages.createdAt))
+    .limit(THREAD_LIMIT);
+
+  /* Anything outside the newest THREAD_LIMIT goes. Only worth a query when the
+     thread is actually at the bound. */
+  if (keep.length === THREAD_LIMIT) {
+    await db
+      .delete(schema.conductorMessages)
+      .where(
+        and(
+          thread(actorId, projectId),
+          notInArray(
+            schema.conductorMessages.id,
+            keep.map((k) => k.id),
+          ),
+        ),
+      );
+  }
+}
+
+/* The thread as it stands, so reopening the page continues rather than
+   restarts. */
+conductorRoutes.get("/history", async (c) => {
+  const actor = requireActor(c);
+  const rows = await loadThread(actor.id, c.req.query("projectId"));
+  return c.json({
+    messages: rows.map((r) => ({ role: r.role, content: r.content, model: r.model })),
+  });
+});
+
+conductorRoutes.delete("/history", async (c) => {
+  const actor = requireActor(c);
+  await db.delete(schema.conductorMessages).where(thread(actor.id, c.req.query("projectId")));
+  return c.json({ ok: true });
+});
+
 conductorRoutes.post("/ask", async (c) => {
   const actor = requireActor(c);
 
   const parsed = Ask.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) throw new BadRequest("Ask something.");
 
+  const projectId = parsed.data.projectId;
+
   try {
+    /* Read from the thread rather than trusting what the client sends: it is
+       the same conversation the interface renders, and it is what lets the
+       Conductor know what was asked of it before the page was reloaded. */
+    const history = (await loadThread(actor.id, projectId)).map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+
     const turn = await askConductor(
       actor,
-      parsed.data.history ?? [],
+      history,
       parsed.data.question,
       c.req.raw.signal,
       {
@@ -76,6 +184,9 @@ conductorRoutes.post("/ask", async (c) => {
         conductorModel: parsed.data.conductorModel,
       },
     );
+
+    if (!parsed.data.silent) await remember(actor.id, projectId, "user", parsed.data.question);
+    await remember(actor.id, projectId, "assistant", turn.text, turn.model);
 
     return c.json({
       text: turn.text,
